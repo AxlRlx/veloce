@@ -1,0 +1,6 @@
+{
+  "name": "Veloce",
+  "description": "Luxurious minimalist car marketplace and rental platform featuring Tinder-style swiping, real-time simulated chat, multi-role dashboards, and secure bookings.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

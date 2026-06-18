@@ -1,0 +1,159 @@
+@import "tailwindcss";
+@import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@500;700;850;900&display=swap');
+
+@theme {
+  --font-sans: "Montserrat", "-apple-system", "SF Pro Text", sans-serif;
+  --font-mono: "Montserrat", monospace;
+
+  /* Exclusive Brand Color Overrides */
+  --color-stone-950: #0A0A0A; /* Main background and headers */
+  --color-stone-900: #141414; /* Cards, listing containers */
+  --color-stone-850: #242424; /* Dark borders, active elements */
+  --color-stone-800: #333333; /* Borders */
+  --color-stone-700: #666666; /* Secondary helper */
+  --color-stone-600: #888888; /* Soft text */
+  --color-stone-505: #A8A8A8;
+  --color-stone-500: #A8A8A8; /* Subtle borders, icons, and secondary text */
+  --color-stone-450: #A8A8A8; /* Subtle secondary text */
+  --color-stone-400: #A8A8A8; /* Subtle border text */
+  --color-stone-300: #CCCCCC; /* Mild text */
+  --color-stone-200: #F0F0F0; /* Main light text on dark backgrounds */
+  --color-stone-100: #F0F0F0; /* Main light text on dark backgrounds */
+  --color-stone-105: #F0F0F0;
+
+  --color-amber-500: #E8B923; /* Rent Now, Buy Now gold primary */
+  --color-amber-450: #FCDA4D; /* Lighter gold primary */
+  --color-amber-550: #D0A212; /* Darker gold primary */
+  --color-amber-600: #B88E0B;
+
+  --color-accent-red: #C8102E; /* Accent Red */
+  --color-accent-green: #006B4F; /* Accent Green */
+}
+
+/* Force rich text and elements to use bold font weight all across the app */
+body, button, input, textarea, select, span, p, h1, h2, h3, h4, h5, h6, label, a, div {
+  font-weight: 700 !important;
+}
+
+html {
+  font-size: 22.2px; /* Increased by an additional 3px as requested */
+}
+
+body {
+  background-color: #0A0A0A; /* Main background */
+  color: #F0F0F0; /* Main text */
+  font-family: var(--font-sans);
+  transition: background-color 0.25s ease, color 0.25s ease;
+}
+
+/* High-End Light Theme Adaptations with Precise Contrast rules */
+.theme-light {
+  background-color: #fafafc !important;
+  color: #111113 !important;
+}
+
+.theme-light body {
+  background-color: #fafafc !important;
+  color: #111113 !important;
+}
+
+.theme-light #veloce_navbar {
+  background-color: rgba(250, 250, 252, 0.88) !important;
+  border-bottom-color: rgba(228, 228, 231, 0.6) !important;
+}
+
+.theme-light #nav_bar_floating {
+  background-color: rgba(250, 250, 252, 0.9) !important;
+  border-color: rgba(228, 228, 231, 0.8) !important;
+  box-shadow: 0 10px 40px -10px rgba(0, 0, 0, 0.08) !important;
+}
+
+.theme-light #veloce_navbar h1 {
+  color: #1c1c1f !important;
+}
+
+.theme-light #veloce_navbar p {
+  color: #71717a !important;
+}
+
+.theme-light .bg-stone-900,
+.theme-light .bg-stone-950,
+.theme-light .bg-\[\#0d0d0f\],
+.theme-light .bg-\[\#0a0a0c\],
+.theme-light .bg-stone-950\/70,
+.theme-light .bg-\[\#0d0d12\],
+.theme-light .bg-stone-905 {
+  background-color: #ffffff !important;
+  border-color: #e4e4e7 !important;
+}
+
+.theme-light .border-stone-800,
+.theme-light .border-stone-850,
+.theme-light .border-stone-900,
+.theme-light .border-stone-900\/40,
+.theme-light .border-stone-800\/80,
+.theme-light .border-stone-900\/80 {
+  border-color: #e4e4e7 !important;
+}
+
+.theme-light .text-stone-100,
+.theme-light .text-stone-200,
+.theme-light .text-stone-300,
+.theme-light .text-stone-450 {
+  color: #18181b !important;
+}
+
+.theme-light .text-stone-400 {
+  color: #4b5563 !important;
+}
+
+.theme-light .text-stone-500,
+.theme-light .text-stone-600 {
+  color: #71717a !important;
+}
+
+.theme-light .bg-stone-950\/45,
+.theme-light .bg-stone-950\/40,
+.theme-light .bg-stone-900\/60,
+.theme-light .bg-\[\#101013\]\/40 {
+  background-color: #f4f4f6 !important;
+  border-color: #e4e4e7 !important;
+}
+
+.theme-light input,
+.theme-light textarea,
+.theme-light select {
+  background-color: #f4f4f6 !important;
+  color: #18181b !important;
+  border-color: #e4e4e7 !important;
+}
+
+.theme-light input::placeholder,
+.theme-light textarea::placeholder {
+  color: #a1a1aa !important;
+}
+
+.theme-light .text-amber-500 {
+  color: #d97706 !important;
+}
+
+.theme-light #nav_profile_circle img {
+  border-color: #e4e4e7 !important;
+}
+
+.theme-light #nav_profile_circle:hover img {
+  border-color: #d97706 !important;
+}
+
+.theme-light .text-emerald-400 {
+  color: #059669 !important;
+}
+
+.theme-light .bg-[#0d0d0f] {
+  background-color: #ffffff !important;
+  border-color: #e4e4e7 !important;
+}
+
+.theme-light #dealer_section {
+  color: #1c1c1f !important;
+}
