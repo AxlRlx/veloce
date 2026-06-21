@@ -10,6 +10,7 @@ import Community from './components/Community';
 import { motion, AnimatePresence } from 'motion/react';
 import { Globe, Compass, MessageSquare, Heart, ShieldAlert, Award, Grid, Menu, X, Landmark, Shield, User as UserIcon, Calendar, Users, Sliders, ChevronLeft, Check, Sparkles, CreditCard } from 'lucide-react';
 import MyFleet from './components/MyFleet';
+import SubscriptionCheckout from './components/SubscriptionCheckout';
 import { auth } from './lib/firebase.ts';
 
 export default function App() {
@@ -110,6 +111,7 @@ export default function App() {
   const [pendingRentCar, setPendingRentCar] = useState<Car | null>(null);
   const [showKycModal, setShowKycModal] = useState(false);
   const [showUpgradeTarget, setShowUpgradeTarget] = useState<'veloce' | 'dealer' | null>(null);
+  const [checkoutSessionId, setCheckoutSessionId] = useState<string | null>(null);
 
   // Sidebar active toggle on mobile layout
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -266,27 +268,118 @@ export default function App() {
   };
 
   const handleInstantUpgrade = async (tier: 'veloce_gt' | 'dealer_paid') => {
-    if (!user) return;
+    if (!user) {
+      alert("Please login first to upgrade your subscription.");
+      return;
+    }
+
+    try {
+      let token = "";
+      if (auth.currentUser) {
+        token = await auth.currentUser.getIdToken();
+      }
+
+      const response = await fetch('/api/billing/create-checkout-session', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+        },
+        body: JSON.stringify({ tier })
+      });
+
+      if (!response.ok) {
+        throw new Error("Failed to initialize secure billing session with Stripe Sandbox.");
+      }
+
+      const resData = await response.json();
+      if (resData.success && resData.sessionId) {
+        setCheckoutSessionId(resData.sessionId);
+        setShowUpgradeTarget(null);
+      }
+    } catch (err: any) {
+      console.error("Billing checkout initiation failed:", err);
+      alert(err.message || "Unable to open billing portal. Please check connection.");
+    }
+  };
+
+  const handleCheckoutSuccess = (updatedProfile: any) => {
+    // update current local user state
     const updatedUser: User = {
-      ...user,
-      subscriptionTier: tier,
-      role: tier === 'dealer_paid' ? 'dealer' : user.role
+      ...user!,
+      subscriptionTier: updatedProfile.subscriptionTier,
+      role: updatedProfile.role
     };
-    await handleUserUpdate(updatedUser);
-    setShowUpgradeTarget(null);
+    setUser(updatedUser);
+    localStorage.setItem('veloce_user', JSON.stringify(updatedUser));
 
     // update accounts database in localStorage
     const dbStr = localStorage.getItem('veloce_accounts_db');
     if (dbStr) {
       const db = JSON.parse(dbStr);
-      const index = db.findIndex((u: any) => u.email === user.email);
+      const index = db.findIndex((u: any) => u.email === user!.email);
       if (index !== -1) {
-        db[index].subscriptionTier = tier;
-        db[index].role = tier === 'dealer_paid' ? 'dealer' : user.role;
+        db[index].subscriptionTier = updatedProfile.subscriptionTier;
+        db[index].role = updatedProfile.role;
         localStorage.setItem('veloce_accounts_db', JSON.stringify(db));
       }
     }
-    alert(`Subscription Upgraded! Welcome to ${tier === 'veloce_gt' ? 'Veloce GT' : 'Official Dealer License'}. Unlimited features are unlocked.`);
+
+    setCheckoutSessionId(null);
+  };
+
+  const handleCancelSubscription = async () => {
+    if (!user) return;
+    if (!window.confirm("Are you sure you want to cancel your active subscription? This will immediately reset your limits back to standard free tiers.")) {
+      return;
+    }
+
+    try {
+      let token = "";
+      if (auth.currentUser) {
+        token = await auth.currentUser.getIdToken();
+      }
+
+      const response = await fetch('/api/billing/cancel-subscription', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+        }
+      });
+
+      if (!response.ok) {
+        throw new Error("Failed to process subscription cancellation on the server.");
+      }
+
+      const data = await response.json();
+      
+      // Update local states
+      const updatedUser: User = {
+        ...user!,
+        subscriptionTier: data.profile.subscriptionTier,
+        role: data.profile.role
+      };
+      setUser(updatedUser);
+      localStorage.setItem('veloce_user', JSON.stringify(updatedUser));
+
+      // Backup localStorage sync
+      const dbStr = localStorage.getItem('veloce_accounts_db');
+      if (dbStr) {
+        const db = JSON.parse(dbStr);
+        const index = db.findIndex((u: any) => u.email === user!.email);
+        if (index !== -1) {
+          db[index].subscriptionTier = data.profile.subscriptionTier;
+          db[index].role = data.profile.role;
+          localStorage.setItem('veloce_accounts_db', JSON.stringify(db));
+        }
+      }
+
+      alert("Your subscription has been safely cancelled. Welcome back to our standard free tier!");
+    } catch (err: any) {
+      console.error("Cancel plan failed:", err);
+      alert(err.message || "Unable to cancel active subscription right now. Try again later.");
+    }
   };
 
   const handleLikedChange = (updatedLikedIds: string[]) => {
@@ -1126,6 +1219,7 @@ export default function App() {
                     theme={theme}
                     onThemeChange={() => {}}
                     onUserUpdate={handleUserUpdate}
+                    onCancelSubscription={handleCancelSubscription}
                     showKycModal={showKycModal}
                     onShowKycModalChange={setShowKycModal}
                     maxDistance={maxDistance}
@@ -1226,7 +1320,7 @@ export default function App() {
         {showUpgradeTarget && (
           <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-stone-950/85 backdrop-blur-sm p-4 overflow-y-auto">
             <motion.div 
-              initial={{ opacity: 0, scale: 0.95 }}
+               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.95 }}
               className="relative w-full max-w-3xl bg-stone-900 border border-stone-800 rounded-3xl p-6 md:p-8 space-y-5 shadow-2xl my-8 overflow-hidden text-left"
@@ -1339,6 +1433,18 @@ export default function App() {
               </div>
             </motion.div>
           </div>
+        )}
+      </AnimatePresence>
+
+      {/* Real-time Simulated Stripe Subscription Billing Portal */}
+      <AnimatePresence>
+        {checkoutSessionId && (
+          <SubscriptionCheckout
+            sessionId={checkoutSessionId}
+            language={language}
+            onSuccess={handleCheckoutSuccess}
+            onCancel={() => setCheckoutSessionId(null)}
+          />
         )}
       </AnimatePresence>
 

@@ -3,7 +3,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { createServer as createViteServer } from "vite";
 import { db } from "./src/db/index.ts";
-import { profiles, vehicles, bookings, conversations, messages, reviews, communityEvents } from "./src/db/schema.ts";
+import { profiles, vehicles, bookings, conversations, messages, reviews, communityEvents, subscriptions, adminReports } from "./src/db/schema.ts";
 import { eq, and, desc } from "drizzle-orm";
 import { adminAuth } from "./src/lib/firebase-admin.ts";
 
@@ -1434,6 +1434,336 @@ async function startServer() {
     } catch (err) {
       console.error("API failed to log review:", err);
       res.status(500).json({ error: "Failed to post review to Postgres." });
+    }
+  });
+
+
+  // ==========================================
+  // PHASE 8 — SUBSCRIPTIONS & ROLES MIDDLEWARE (STRIPE CHECKOUT SIMULATION)
+  // ==========================================
+
+  // 1. POST /api/billing/create-checkout-session
+  app.post("/api/billing/create-checkout-session", verifyFirebaseUser, async (req, res) => {
+    const user = (req as any).user;
+    const { tier } = req.body;
+
+    if (!tier || (tier !== "veloce_gt" && tier !== "dealer_paid")) {
+      return res.status(400).json({ error: "Invalid subscription tier targeted." });
+    }
+
+    try {
+      // Return a stateless session ID containing the target tier encoded with a timestamp
+      const sessionId = `stripe_cs_mock_${tier}_${Date.now()}`;
+      res.json({
+        success: true,
+        sessionId,
+        url: `/checkout?session_id=${sessionId}`
+      });
+    } catch (err) {
+      console.error("Failed to initiate billing portal session:", err);
+      res.status(500).json({ error: "Billing backend transaction failed." });
+    }
+  });
+
+  // 2. POST /api/billing/verify-checkout-session
+  app.post("/api/billing/verify-checkout-session", verifyFirebaseUser, async (req, res) => {
+    const user = (req as any).user;
+    const { sessionId } = req.body;
+
+    if (!sessionId) {
+      return res.status(400).json({ error: "Session identification is required." });
+    }
+
+    try {
+      // Decode the target tier from the mock session ID
+      let tier: "veloce_gt" | "dealer_paid" = "veloce_gt";
+      if (sessionId.includes("dealer_paid")) {
+        tier = "dealer_paid";
+      }
+
+      const role = tier === "dealer_paid" ? "dealer" : "user";
+
+      // 1. Update the user profile
+      const updatedProfileRes = await db
+        .update(profiles)
+        .set({
+          subscriptionTier: tier,
+          role: role,
+          updatedAt: new Date()
+        })
+        .where(eq(profiles.id, user.uid))
+        .returning();
+
+      if (updatedProfileRes.length === 0) {
+        return res.status(404).json({ error: "Active user profile was not found." });
+      }
+
+      // 2. Create the subscription history row
+      const subId = `sub_mock_${Date.now()}`;
+      await db.insert(subscriptions).values({
+        id: subId,
+        userId: user.uid,
+        stripeCustomerId: `cus_mock_${Date.now()}`,
+        stripeSubscriptionId: `sub_mock_id_${Date.now()}`,
+        tier: tier,
+        status: "active",
+        currentPeriodEnd: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // 30 days
+        createdAt: new Date(),
+        updatedAt: new Date()
+      });
+
+      res.json({
+        success: true,
+        profile: updatedProfileRes[0],
+        subscription: {
+          id: subId,
+          tier,
+          status: "active",
+          expiry: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]
+        }
+      });
+    } catch (err) {
+      console.error("Failed to verify billing session status:", err);
+      res.status(500).json({ error: "Checkout session verification failed." });
+    }
+  });
+
+  // 3. POST /api/billing/cancel-subscription
+  app.post("/api/billing/cancel-subscription", verifyFirebaseUser, async (req, res) => {
+    const user = (req as any).user;
+
+    try {
+      // Update profile back to free
+      const updatedProfileRes = await db
+        .update(profiles)
+        .set({
+          subscriptionTier: "free",
+          role: "user", // Reset back as free user role
+          updatedAt: new Date()
+        })
+        .where(eq(profiles.id, user.uid))
+        .returning();
+
+      // Set active subscriptions to cancelled
+      await db.update(subscriptions)
+        .set({
+          status: "cancelled",
+          updatedAt: new Date()
+        })
+        .where(and(eq(subscriptions.userId, user.uid), eq(subscriptions.status, "active")));
+
+      res.json({
+        success: true,
+        profile: updatedProfileRes[0]
+      });
+    } catch (err) {
+      console.error("Failed to cancel active subscription:", err);
+      res.status(500).json({ error: "Subscription cancellation service failed." });
+    }
+  });
+
+
+  // ==========================================
+  // PHASE 9 — UGC SAFETY, COMPLIANCE & ADMIN MODERATION HUB
+  // ==========================================
+
+  // 1. POST /api/reports - Create a safety/content report
+  app.post("/api/reports", verifyFirebaseUser, async (req, res) => {
+    const user = (req as any).user;
+    const { targetType, targetId, reason } = req.body;
+
+    if (!targetType || !targetId || !reason) {
+      return res.status(400).json({ error: "Missing required report fields." });
+    }
+
+    try {
+      const reportId = `rep_${Date.now()}`;
+      await db.insert(adminReports).values({
+        id: reportId,
+        reporterId: user.uid,
+        targetType,
+        targetId,
+        reason,
+        status: "pending",
+        createdAt: new Date()
+      });
+
+      res.status(201).json({
+        success: true,
+        message: "Content successfully reported. Our UGC moderation team will review this asset shortly.",
+        reportId
+      });
+    } catch (err) {
+      console.error("Failed to insert safety report:", err);
+      res.status(500).json({ error: "Could not record safety report." });
+    }
+  });
+
+  // 2. GET /api/reports - Fetch all reports (Admins only)
+  app.get("/api/reports", verifyFirebaseUser, async (req, res) => {
+    const user = (req as any).user;
+
+    try {
+      // Confirm requestor is admin
+      const profileRes = await db.select().from(profiles).where(eq(profiles.id, user.uid)).limit(1);
+      const profile = profileRes[0];
+      if (!profile || profile.role !== "admin") {
+        return res.status(403).json({ error: "Access denied. Admin role required." });
+      }
+
+      // Fetch all reports
+      const reports = await db
+        .select()
+        .from(adminReports)
+        .orderBy(desc(adminReports.createdAt));
+
+      // Fetch reporter details to join manually
+      const reporterIds = [...new Set(reports.map(r => r.reporterId))];
+      const reporterProfilesMap: Record<string, any> = {};
+      
+      if (reporterIds.length > 0) {
+        for (const id of reporterIds) {
+          const uProfile = await db.select().from(profiles).where(eq(profiles.id, id)).limit(1);
+          if (uProfile[0]) {
+            reporterProfilesMap[id] = uProfile[0];
+          }
+        }
+      }
+
+      const enrichedReports = reports.map(r => ({
+        ...r,
+        reporterName: reporterProfilesMap[r.reporterId]?.fullName || "Veloce Member",
+        reporterEmail: reporterProfilesMap[r.reporterId]?.email || "hidden"
+      }));
+
+      res.json(enrichedReports);
+    } catch (err) {
+      console.error("Failed to load moderation reports:", err);
+      res.status(500).json({ error: "Could not load safety reports." });
+    }
+  });
+
+  // 3. PUT /api/reports/:id/resolve - Mark a report as resolved
+  app.put("/api/reports/:id/resolve", verifyFirebaseUser, async (req, res) => {
+    const user = (req as any).user;
+    const { id } = req.params;
+
+    try {
+      const profileRes = await db.select().from(profiles).where(eq(profiles.id, user.uid)).limit(1);
+      const profile = profileRes[0];
+      if (!profile || profile.role !== "admin") {
+        return res.status(403).json({ error: "Access denied. Admin role required." });
+      }
+
+      const updated = await db
+        .update(adminReports)
+        .set({ status: "resolved" })
+        .where(eq(adminReports.id, id))
+        .returning();
+
+      if (updated.length === 0) {
+        return res.status(404).json({ error: "Report was not found." });
+      }
+
+      res.json({ success: true, report: updated[0] });
+    } catch (err) {
+      console.error("Failed to resolve report:", err);
+      res.status(500).json({ error: "Could not update report status." });
+    }
+  });
+
+  // 4. DELETE /api/admin/vehicles/:id - Remove reported vehicle (Admins only)
+  app.delete("/api/admin/vehicles/:id", verifyFirebaseUser, async (req, res) => {
+    const user = (req as any).user;
+    const { id } = req.params;
+
+    try {
+      const profileRes = await db.select().from(profiles).where(eq(profiles.id, user.uid)).limit(1);
+      const profile = profileRes[0];
+      if (!profile || profile.role !== "admin") {
+        return res.status(403).json({ error: "Access denied. Admin role required." });
+      }
+
+      const deleted = await db
+        .delete(vehicles)
+        .where(eq(vehicles.id, id))
+        .returning();
+
+      if (deleted.length === 0) {
+        return res.status(404).json({ error: "Vehicle was not found." });
+      }
+
+      // Automatically resolve associated reports
+      await db
+        .update(adminReports)
+        .set({ status: "resolved" })
+        .where(and(eq(adminReports.targetId, id), eq(adminReports.targetType, "vehicle")));
+
+      res.json({ success: true, message: "Vehicle removed successfully by Admin." });
+    } catch (err) {
+      console.error("Failed to delete vehicle as admin:", err);
+      res.status(500).json({ error: "Failed to remove vehicle." });
+    }
+  });
+
+  // 5. DELETE /api/admin/community/events/:id - Remove reported community event (Admins only)
+  app.delete("/api/admin/community/events/:id", verifyFirebaseUser, async (req, res) => {
+    const user = (req as any).user;
+    const { id } = req.params;
+
+    try {
+      const profileRes = await db.select().from(profiles).where(eq(profiles.id, user.uid)).limit(1);
+      const profile = profileRes[0];
+      if (!profile || profile.role !== "admin") {
+        return res.status(403).json({ error: "Access denied. Admin role required." });
+      }
+
+      const deleted = await db
+        .delete(communityEvents)
+        .where(eq(communityEvents.id, id))
+        .returning();
+
+      if (deleted.length === 0) {
+        return res.status(404).json({ error: "Event was not found." });
+      }
+
+      // Automatically resolve associated reports
+      await db
+        .update(adminReports)
+        .set({ status: "resolved" })
+        .where(and(eq(adminReports.targetId, id), eq(adminReports.targetType, "event")));
+
+      res.json({ success: true, message: "Event removed successfully by Admin." });
+    } catch (err) {
+      console.error("Failed to delete event as admin:", err);
+      res.status(500).json({ error: "Failed to remove event." });
+    }
+  });
+
+  // 6. PUT /api/auth/profile/role - Toggle current user's role on server (Simulation helper)
+  app.put("/api/auth/profile/role", verifyFirebaseUser, async (req, res) => {
+    const user = (req as any).user;
+    const { role } = req.body;
+
+    if (!role || (role !== "user" && role !== "dealer" && role !== "admin")) {
+      return res.status(400).json({ error: "Invalid role value." });
+    }
+
+    try {
+      const updated = await db
+        .update(profiles)
+        .set({ role, updatedAt: new Date() })
+        .where(eq(profiles.id, user.uid))
+        .returning();
+
+      if (updated.length === 0) {
+        return res.status(404).json({ error: "Profile was not found." });
+      }
+
+      res.json({ success: true, profile: updated[0] });
+    } catch (err) {
+      console.error("Failed to update user's role:", err);
+      res.status(500).json({ error: "Could not alter user role." });
     }
   });
 

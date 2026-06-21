@@ -3,7 +3,7 @@ export interface User {
   name: string;
   email: string;
   avatar: string;
-  role: 'user' | 'dealer';
+  role: 'user' | 'dealer' | 'admin';
   likedCarIds: string[];
   savedCarIds: string[];
   subscriptionTier?: 'free' | 'veloce_gt' | 'dealer_paid';

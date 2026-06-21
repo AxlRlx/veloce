@@ -1635,10 +1635,34 @@ export default function Swiper({
                     <button
                       type="button"
                       disabled={!reportReason}
-                      onClick={() => {
-                        setReportSuccess(
-                          `Listing reported under justification: "${reportReason}". This item has been immediately hidden from your view queue, and our UGC moderation console has queued the asset for standard rapid review removal.`
-                        );
+                      onClick={async () => {
+                        try {
+                          let token = "";
+                          if (auth.currentUser) {
+                            token = await auth.currentUser.getIdToken();
+                          }
+                          const response = await fetch('/api/reports', {
+                            method: 'POST',
+                            headers: {
+                              'Content-Type': 'application/json',
+                              ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+                            },
+                            body: JSON.stringify({
+                              targetType: 'vehicle',
+                              targetId: activeCar.id,
+                              reason: reportReason
+                            })
+                          });
+                          if (!response.ok) {
+                            throw new Error("Failed to register safety audit ticket.");
+                          }
+                          setReportSuccess(
+                            `Listing reported under justification: "${reportReason}". This item has been immediately hidden from your view queue, and our UGC moderation console has queued the asset for standard rapid review removal.`
+                          );
+                        } catch (err: any) {
+                          console.error("UGC report failed:", err);
+                          alert(err.message || "UGC shield server unreachable. Please try again.");
+                        }
                       }}
                       className="w-full py-2.5 bg-red-650 hover:bg-red-600 border border-red-500/20 text-white disabled:opacity-35 disabled:cursor-not-allowed rounded-xl font-mono text-[10px] font-bold uppercase tracking-widest transition-all cursor-pointer shadow-lg shadow-red-950/20"
                     >

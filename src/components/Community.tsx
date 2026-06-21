@@ -18,7 +18,8 @@ import {
   Check, 
   Tv as TikTokIcon, 
   Flame, 
-  Globe 
+  Globe,
+  Shield
 } from 'lucide-react';
 import { CommunityEvent, CreatorPost, AppLanguage, User } from '../types';
 import { auth } from '../lib/firebase';
@@ -177,6 +178,9 @@ export default function Community({ currentUser, language, theme, onUserUpdate }
   // Events list loaded from server, and Creators from localstorage
   const [events, setEvents] = useState<CommunityEvent[]>([]);
   const [loadingEvents, setLoadingEvents] = useState(true);
+  const [showEventReportForm, setShowEventReportForm] = useState(false);
+  const [eventReportReason, setEventReportReason] = useState("");
+  const [eventReportSuccess, setEventReportSuccess] = useState<string | null>(null);
 
   const loadEvents = async () => {
     try {
@@ -1107,7 +1111,12 @@ export default function Community({ currentUser, language, theme, onUserUpdate }
               {/* Close pin */}
               <button
                 type="button"
-                onClick={() => setSelectedEventForDetails(null)}
+                onClick={() => {
+                  setSelectedEventForDetails(null);
+                  setShowEventReportForm(false);
+                  setEventReportReason("");
+                  setEventReportSuccess(null);
+                }}
                 className="absolute top-5 right-5 text-stone-500 hover:text-white font-mono cursor-pointer text-base p-1.5 rounded-full bg-stone-950 border border-stone-800"
               >
                 ✕
@@ -1190,6 +1199,95 @@ export default function Community({ currentUser, language, theme, onUserUpdate }
                 </div>
               </div>
 
+              {/* UGC Shield & Reporting Center */}
+              <div className="border-t border-stone-850 pt-4 space-y-3">
+                {!showEventReportForm ? (
+                  <button
+                    type="button"
+                    onClick={() => setShowEventReportForm(true)}
+                    className="flex items-center gap-1.5 text-[9.5px] font-mono uppercase tracking-widest text-stone-550 hover:text-red-400 transition cursor-pointer"
+                  >
+                    <Shield className="w-3.5 h-3.5" />
+                    <span>Report this Event to UGC Moderation</span>
+                  </button>
+                ) : eventReportSuccess ? (
+                  <div className="p-3 bg-semibold bg-emerald-500/15 border border-emerald-500/30 rounded-xl space-y-1 text-center font-mono text-[9px]">
+                    <p className="text-emerald-400 font-bold uppercase tracking-wider">✓ Event Successfully Reported</p>
+                    <p className="text-stone-300 font-sans leading-relaxed text-[11px]">{eventReportSuccess}</p>
+                  </div>
+                ) : (
+                  <div className="bg-stone-950 p-4 border border-stone-850 rounded-2xl space-y-3">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[9.5px] font-mono font-bold uppercase tracking-widest text-stone-400">Specify Violation Details</span>
+                      <button 
+                        type="button" 
+                        onClick={() => setShowEventReportForm(false)} 
+                        className="text-[9.5px] font-mono uppercase text-stone-500 hover:text-white"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                    
+                    <div className="grid grid-cols-2 gap-2">
+                      {[
+                        'Inappropriate/Offensive Details',
+                        'Spam/Misrepresented Gathering',
+                        'Commercial Solicitation',
+                        'Unsafe Driving/Illegal Activities'
+                      ].map((reason) => (
+                        <button
+                          key={reason}
+                          type="button"
+                          onClick={() => setEventReportReason(reason)}
+                          className={`p-2 rounded-xl text-left border text-[10px] font-sans transition-all cursor-pointer ${
+                            eventReportReason === reason
+                              ? 'bg-red-500/10 border-red-500/40 text-red-400 font-medium'
+                              : 'bg-stone-900 border-stone-850 text-stone-300 font-normal shadow-sm'
+                          }`}
+                        >
+                          {reason}
+                        </button>
+                      ))}
+                    </div>
+
+                    <button
+                      type="button"
+                      disabled={!eventReportReason}
+                      onClick={async () => {
+                        try {
+                          let token = "";
+                          if (auth.currentUser) {
+                            token = await auth.currentUser.getIdToken();
+                          }
+                          const response = await fetch('/api/reports', {
+                            method: 'POST',
+                            headers: {
+                              'Content-Type': 'application/json',
+                              ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+                            },
+                            body: JSON.stringify({
+                              targetType: 'event',
+                              targetId: selectedEventForDetails.id,
+                              reason: eventReportReason
+                            })
+                          });
+                          if (!response.ok) {
+                            throw new Error("Failed to file UGC event audit ticket.");
+                          }
+                          setEventReportSuccess(`UGC safety report saved. Our moderation team has queued "${eventReportReason}" for inspection.`);
+                        } catch (err: any) {
+                          console.error("Event report failed:", err);
+                          alert(err.message || "UGC network issue. Please try again.");
+                        }
+                      }}
+                      className="w-full py-2 bg-red-650 hover:bg-red-600 disabled:opacity-30 disabled:cursor-not-allowed border border-red-500/20 text-white rounded-xl font-mono text-[9px] font-bold uppercase tracking-wider transition-all cursor-pointer"
+                    >
+                      Submit Flag Report
+                    </button>
+                  </div>
+                )}
+              </div>
+
               {/* Modal footer with RSVP and close buttons */}
               <div className="flex gap-2.5 pt-2">
                 <button
@@ -1219,7 +1317,12 @@ export default function Community({ currentUser, language, theme, onUserUpdate }
                 </button>
                 <button
                   type="button"
-                  onClick={() => setSelectedEventForDetails(null)}
+                  onClick={() => {
+                    setSelectedEventForDetails(null);
+                    setShowEventReportForm(false);
+                    setEventReportReason("");
+                    setEventReportSuccess(null);
+                  }}
                   className="px-5 py-3 bg-stone-950 border border-stone-850 hover:bg-stone-850 text-stone-400 rounded-xl font-mono text-[9.5px] uppercase font-bold tracking-widest transition cursor-pointer"
                 >
                   Dismiss

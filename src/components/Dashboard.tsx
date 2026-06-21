@@ -2,12 +2,14 @@ import { useState } from 'react';
 import { User, Car, Booking, AppLanguage, COMMON_BRANDS_MODELS } from '../types';
 import { DICTIONARY } from '../data';
 import { motion, AnimatePresence } from 'motion/react';
+import { auth } from '../lib/firebase';
 import { 
-  Plus, Check, Heart, Shield, Trash2, Sliders, 
+  Plus, Check, Heart, Shield, Trash2, Sliders, X,
   BarChart3, Globe, Sun, Moon, Users, CreditCard, 
   Sparkles, ExternalLink, Calendar, KeyRound, MessageCircle, Info,
   UserCheck, Eye, FileText, Camera, User as UserIcon
 } from 'lucide-react';
+import AdminSafetyConsole from './AdminSafetyConsole';
 
 interface DashboardProps {
   currentUser: User;
@@ -26,6 +28,7 @@ interface DashboardProps {
   theme: 'light' | 'dark';
   onThemeChange: (theme: 'light' | 'dark') => void;
   onUserUpdate: (updatedUser: User) => void;
+  onCancelSubscription?: () => void;
   showKycModal?: boolean;
   onShowKycModalChange?: (val: boolean) => void;
   maxDistance?: number;
@@ -51,6 +54,7 @@ export default function Dashboard({
   theme,
   onThemeChange,
   onUserUpdate,
+  onCancelSubscription,
   showKycModal: propShowKycModal,
   onShowKycModalChange: propOnShowKycModalChange,
   maxDistance = 100,
@@ -327,6 +331,17 @@ export default function Dashboard({
             </button>
           )}
 
+          {!isFree && onCancelSubscription && (
+            <button
+              onClick={onCancelSubscription}
+              className="py-2.5 px-4 bg-stone-950 hover:bg-stone-900 border border-rose-500/35 text-rose-450 font-mono text-[9.5px] uppercase font-bold tracking-wider rounded-xl transition flex items-center justify-center gap-1.5 cursor-pointer w-full sm:w-auto md:w-auto shrink-0 active:scale-95"
+              title="Cancel subscription subscription"
+            >
+              <X className="w-3.5 h-3.5 shrink-0" />
+              <span>Cancel Plan</span>
+            </button>
+          )}
+
           {/* Verification Portal Trigger Button */}
           <button
             onClick={() => setShowKycModal(true)}
@@ -355,6 +370,11 @@ export default function Dashboard({
 
       {/* Console Section Grid */}
       <div className="w-full space-y-8">
+
+        {/* UGC ADMIN PANEL CONSOLE */}
+        {currentUser.role === 'admin' && (
+          <AdminSafetyConsole currentUser={currentUser} theme={theme} />
+        )}
 
         {/* CUSTOMIZE PROFILE PICTURE MODAL */}
         <AnimatePresence>
@@ -1524,6 +1544,71 @@ export default function Dashboard({
             </div>
 
 
+          </div>
+
+          {/* Simulation & Role Sandbox Hub */}
+          <div className="border-t border-stone-850 pt-4.5 space-y-3">
+            <div className="flex items-center justify-between">
+              <label className="text-[10px] uppercase tracking-widest text-[#d97706] font-mono flex items-center gap-1.5 font-bold">
+                <Shield className="w-3.5 h-3.5 text-amber-500" />
+                <span>Simulation Sandbox Role Switcher</span>
+              </label>
+              <span className="text-[8px] bg-amber-500/10 border border-amber-500/25 text-amber-550 font-mono py-0.5 px-2 rounded uppercase font-bold">
+                Developer Tool
+              </span>
+            </div>
+            <p className="text-[10px] text-stone-400 font-sans leading-normal">
+              Dynamically switch your active account role to inspect different perspectives. Elevating to **UGC Admin** instantly mounts our **Asset Moderation Safety Console**.
+            </p>
+            <div className="grid grid-cols-3 gap-2 font-mono text-[9px] uppercase tracking-wider font-extrabold">
+              {[
+                { name: 'Standard User', role: 'user', color: 'border-stone-805 bg-stone-950/40 text-stone-500 hover:text-stone-300' },
+                { name: 'Dealer Operator', role: 'dealer', color: 'border-red-500/15 bg-stone-950/40 text-red-500 hover:text-red-400' },
+                { name: 'UGC Admin Moderator', role: 'admin', color: 'border-amber-500/15 bg-amber-500/5 text-amber-500 hover:text-amber-400' }
+              ].map((item) => {
+                const isActive = currentUser.role === item.role;
+                return (
+                  <button
+                    key={item.role}
+                    type="button"
+                    onClick={async () => {
+                      try {
+                        let token = "";
+                        if (auth.currentUser) {
+                          token = await auth.currentUser.getIdToken();
+                        }
+                        const response = await fetch('/api/auth/profile/role', {
+                          method: 'PUT',
+                          headers: {
+                            'Content-Type': 'application/json',
+                            ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+                          },
+                          body: JSON.stringify({ role: item.role })
+                        });
+                        if (!response.ok) {
+                          throw new Error("Unable to synchronize role mapping with servers.");
+                        }
+                        const data = await response.json();
+                        onUserUpdate({
+                          ...currentUser,
+                          role: data.profile.role
+                        });
+                      } catch (err: any) {
+                        console.error("Role swap failed:", err);
+                        alert(err.message || "Failed to swap roles due to network issues.");
+                      }
+                    }}
+                    className={`py-2 p-2 border rounded-xl text-center cursor-pointer transition-all ${
+                      isActive 
+                        ? 'border-amber-500 bg-amber-500 text-stone-950 font-extrabold shadow-lg shadow-amber-950/20' 
+                        : `hover:border-stone-700 ${item.color} font-medium`
+                    }`}
+                  >
+                    {item.name}
+                  </button>
+                );
+              })}
+            </div>
           </div>
         </div>
 
