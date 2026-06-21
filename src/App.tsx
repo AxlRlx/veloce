@@ -10,6 +10,7 @@ import Community from './components/Community';
 import { motion, AnimatePresence } from 'motion/react';
 import { Globe, Compass, MessageSquare, Heart, ShieldAlert, Award, Grid, Menu, X, Landmark, Shield, User as UserIcon, Calendar, Users, Sliders, ChevronLeft, Check, Sparkles, CreditCard } from 'lucide-react';
 import MyFleet from './components/MyFleet';
+import { auth } from './lib/firebase.ts';
 
 export default function App() {
   // Current logged in user context
@@ -17,6 +18,43 @@ export default function App() {
     const cached = localStorage.getItem('veloce_user');
     return cached ? JSON.parse(cached) : null;
   });
+
+  // Track real-time Firebase Auth session and synchronize profile details
+  useEffect(() => {
+    const unsubscribe = auth.onAuthStateChanged(async (firebaseUser) => {
+      if (firebaseUser) {
+        try {
+          const token = await firebaseUser.getIdToken();
+          const response = await fetch('/api/auth/profile', {
+            headers: {
+              'Authorization': `Bearer ${token}`
+            }
+          });
+          if (response.ok) {
+            const syncedProfile = await response.json();
+            setUser({
+              id: syncedProfile.id,
+              name: syncedProfile.fullName || 'Anonymous Driver',
+              email: syncedProfile.email,
+              avatar: syncedProfile.avatarUrl || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?q=80&w=150',
+              role: syncedProfile.role,
+              likedCarIds: [],
+              savedCarIds: [],
+              subscriptionTier: syncedProfile.subscriptionTier,
+              kycStatus: syncedProfile.kycStatus,
+              isKycVerified: syncedProfile.kycStatus === 'verified'
+            });
+          }
+        } catch (err) {
+          console.error("Failed to restore synchronized profile from backend:", err);
+        }
+      } else {
+        setUser(null);
+      }
+    });
+
+    return () => unsubscribe();
+  }, []);
 
   // Master cars list
   const [cars, setCars] = useState<Car[]>(() => {
@@ -76,79 +114,89 @@ export default function App() {
   // Sidebar active toggle on mobile layout
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
-  // Seed dynamic initial chat logs once user logs in
-  useEffect(() => {
-    if (!user) return;
+  // Fetch registered vehicle listings from database node backend endpoint
+  const [isLoadingVehicles, setIsLoadingVehicles] = useState(false);
+  const [vehiclesError, setVehiclesError] = useState<string | null>(null);
 
-    const cached = localStorage.getItem(`veloce_chats_${user.id}`);
-    if (cached) {
-      setChatSessions(JSON.parse(cached));
-    } else {
-      const initialChats: ChatSession[] = [
-        {
-          id: 'chat_sf90',
-          carId: 'car_001',
-          userId: user.id,
-          dealerId: 'dealer_maranello',
-          carName: 'Ferrari SF90 Stradale',
-          carImage: 'https://images.unsplash.com/photo-1583121274602-3e2820c69888?q=80&w=200',
-          dealerName: 'Apex Cavallino Scuderia',
-          dealerAvatar: 'https://images.unsplash.com/photo-1542841791-1926673bf69b?q=80&w=120',
-          userName: user.name,
-          lastMessage: 'All documents are ready! Your car is prepared for pickup at Beverly Hills.',
-          timestamp: '10:42 AM',
-          unread: true,
-          messages: [
-            {
-              id: 'msg_1',
-              senderId: 'dealer_maranello',
-              senderName: 'Apex Cavallino Scuderia',
-              text: 'Congratulations on matching with this Ferrari SF90 Stradale. Would you like to pick it up at our Beverly Hills location, or should we deliver it to you?',
-              timestamp: '10:30 AM'
-            },
-            {
-              id: 'msg_2',
-              senderId: user.id,
-              senderName: user.name,
-              text: 'Beverly Hills works best for me. Do I need to provide extra insurance?',
-              timestamp: '10:38 AM'
-            },
-            {
-              id: 'msg_3',
-              senderId: 'dealer_maranello',
-              senderName: 'Apex Cavallino Scuderia',
-              text: 'Every booking includes standard insurance. We recommend choosing our Full Coverage option for complete peace of mind during your drive.',
-              timestamp: '10:42 AM'
-            }
-          ]
-        },
-        {
-          id: 'chat_gt3',
-          carId: 'car_002',
-          userId: user.id,
-          dealerId: 'dealer_stuttgart',
-          carName: 'Porsche 911 GT3 RS',
-          carImage: 'https://images.unsplash.com/photo-1614162692292-7ac56d7f7f1e?q=80&w=200',
-          dealerName: 'Stuttgart Classics & Exotics',
-          dealerAvatar: 'https://images.unsplash.com/photo-1522335789203-aabd1fc54bc9?q=80&w=120',
-          userName: user.name,
-          lastMessage: 'Serviced and ready for you.',
-          timestamp: 'Yesterday',
-          unread: false,
-          messages: [
-            {
-              id: 'msg_4',
-              senderId: 'dealer_stuttgart',
-              senderName: 'Stuttgart Classics & Exotics',
-              text: 'Hello, your car is fully serviced, tire pressures are perfect, and it is ready to go!',
-              timestamp: 'Yesterday'
-            }
-          ]
-        }
-      ];
-      setChatSessions(initialChats);
-      localStorage.setItem(`veloce_chats_${user.id}`, JSON.stringify(initialChats));
+  const fetchVehicles = async () => {
+    setIsLoadingVehicles(true);
+    setVehiclesError(null);
+    try {
+      const headersKey: Record<string, string> = {};
+      if (auth.currentUser) {
+        const token = await auth.currentUser.getIdToken();
+        headersKey['Authorization'] = `Bearer ${token}`;
+      }
+      const response = await fetch('/api/vehicles', {
+        headers: headersKey
+      });
+      if (!response.ok) {
+        throw new Error('Could not retrieve vehicle list from Veloce cloud database.');
+      }
+      const data = await response.json();
+      setCars(data);
+    } catch (err: any) {
+      console.error("Veloce DB connection issue:", err);
+      setVehiclesError(err.message || 'Unable to communicate with the database.');
+    } finally {
+      setIsLoadingVehicles(false);
     }
+  };
+
+  const fetchBookings = async () => {
+    if (!user) {
+      setBookings([]);
+      return;
+    }
+    try {
+      let token = "";
+      if (auth.currentUser) {
+        token = await auth.currentUser.getIdToken();
+      }
+      const response = await fetch('/api/bookings', {
+        headers: token ? { 'Authorization': `Bearer ${token}` } : {}
+      });
+      if (response.ok) {
+        const data = await response.json();
+        setBookings(data);
+      }
+    } catch (err) {
+      console.error("Failed to fetch user bookings:", err);
+    }
+  };
+
+  useEffect(() => {
+    fetchVehicles();
+    fetchBookings();
+  }, [user]);
+
+  // Retrieve user chats dynamically from PostgreSQL backend server
+  useEffect(() => {
+    const fetchChats = async () => {
+      if (!user) return;
+      try {
+        let token = "";
+        if (auth.currentUser) {
+          token = await auth.currentUser.getIdToken();
+        }
+        const response = await fetch('/api/chats', {
+          headers: {
+            ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+          }
+        });
+        if (response.ok) {
+          const chatsList = await response.json();
+          setChatSessions(chatsList);
+        }
+      } catch (err) {
+        console.error("Failed to fetch conversations from server:", err);
+      }
+    };
+
+    fetchChats();
+    // Poll for updates to simulate real-time replies
+    const pollInterval = setInterval(fetchChats, 7500);
+    return () => clearInterval(pollInterval);
   }, [user]);
 
   // Persist storage whenever collections shift
@@ -181,20 +229,50 @@ export default function App() {
     setCurrentSection(AppSection.EXPLORE);
   };
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    try {
+      await auth.signOut();
+    } catch (err) {
+      console.error("Firebase signOut failed:", err);
+    }
     setUser(null);
     setCurrentSection(AppSection.EXPLORE);
   };
 
-  const handleInstantUpgrade = (tier: 'veloce_gt' | 'dealer_paid') => {
+  const handleUserUpdate = async (updatedUser: User) => {
+    setUser(updatedUser);
+    localStorage.setItem('veloce_user', JSON.stringify(updatedUser));
+    try {
+      if (auth.currentUser) {
+        const token = await auth.currentUser.getIdToken();
+        await fetch('/api/auth/profile', {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`
+          },
+          body: JSON.stringify({
+            name: updatedUser.name,
+            avatar: updatedUser.avatar,
+            role: updatedUser.role,
+            subscriptionTier: updatedUser.subscriptionTier,
+            kycStatus: updatedUser.kycStatus
+          })
+        });
+      }
+    } catch (err) {
+      console.error("Failed to sync profile update on backend server:", err);
+    }
+  };
+
+  const handleInstantUpgrade = async (tier: 'veloce_gt' | 'dealer_paid') => {
     if (!user) return;
     const updatedUser: User = {
       ...user,
       subscriptionTier: tier,
       role: tier === 'dealer_paid' ? 'dealer' : user.role
     };
-    setUser(updatedUser);
-    localStorage.setItem('veloce_user', JSON.stringify(updatedUser));
+    await handleUserUpdate(updatedUser);
     setShowUpgradeTarget(null);
 
     // update accounts database in localStorage
@@ -239,46 +317,190 @@ export default function App() {
     });
   };
 
-  const handleAddNewCar = (newCar: Car) => {
-    setCars(prev => [newCar, ...prev]);
+  const handleAddNewCar = async (newCar: Car) => {
+    try {
+      let token = "";
+      if (auth.currentUser) {
+        token = await auth.currentUser.getIdToken();
+      }
+      const response = await fetch('/api/vehicles', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+        },
+        body: JSON.stringify({
+          brand: newCar.brand,
+          make: newCar.brand,
+          model: newCar.model,
+          year: newCar.year,
+          price: newCar.type === 'rent' ? 0 : newCar.price,
+          rentalPriceDaily: newCar.price, // or whichever was set
+          type: newCar.type,
+          location: newCar.location || 'Beverly Hills, CA',
+          description: newCar.description,
+          mileage: newCar.mileage || 500,
+          transmission: newCar.transmission || 'Automatic',
+          displacement: newCar.displacement || 'Petrol',
+          power: newCar.power || 400,
+          category: newCar.category || 'car',
+          images: newCar.images,
+          status: newCar.status || 'draft'
+        })
+      });
+      if (!response.ok) {
+        throw new Error('Database registry server execution failed.');
+      }
+      const savedCar = await response.json();
+      setCars(prev => [savedCar, ...prev]);
+    } catch (err: any) {
+      console.error("Failed to add car dynamically:", err);
+      alert("Error adding vehicle to database: " + err.message);
+    }
   };
 
-  const handleUpdateCar = (updatedCar: Car) => {
-    setCars(prev => prev.map(c => c.id === updatedCar.id ? updatedCar : c));
+  const handleUpdateCar = async (updatedCar: Car) => {
+    try {
+      let token = "";
+      if (auth.currentUser) {
+        token = await auth.currentUser.getIdToken();
+      }
+      const response = await fetch(`/api/vehicles/${updatedCar.id}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+        },
+        body: JSON.stringify({
+          brand: updatedCar.brand,
+          model: updatedCar.model,
+          year: updatedCar.year,
+          price: updatedCar.type === 'rent' ? 0 : updatedCar.price,
+          rentalPriceDaily: updatedCar.price,
+          type: updatedCar.type,
+          location: updatedCar.location,
+          description: updatedCar.description,
+          mileage: updatedCar.mileage,
+          transmission: updatedCar.transmission,
+          displacement: updatedCar.displacement,
+          power: updatedCar.power,
+          category: updatedCar.category,
+          images: updatedCar.images,
+          status: updatedCar.status
+        })
+      });
+      if (!response.ok) {
+        throw new Error('Database update server execution failed.');
+      }
+      const saved = await response.json();
+      setCars(prev => prev.map(c => c.id === saved.id ? saved : c));
+    } catch (err: any) {
+      console.error("Failed to update car:", err);
+      alert("Error updating vehicle: " + err.message);
+    }
   };
 
-  const handleCancelBooking = (bookingId: string) => {
-    setBookings(prev => prev.filter(b => b.id !== bookingId));
+  const handleDeleteCar = async (carId: string) => {
+    if (!window.confirm("Are you sure you want to permanently delete this listing from your fleet database?")) {
+      return;
+    }
+    try {
+      let token = "";
+      if (auth.currentUser) {
+        token = await auth.currentUser.getIdToken();
+      }
+      const response = await fetch(`/api/vehicles/${carId}`, {
+        method: 'DELETE',
+        headers: {
+          ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+        }
+      });
+      if (!response.ok) {
+        throw new Error('Database removal server execution failed.');
+      }
+      setCars(prev => prev.filter(c => c.id !== carId));
+    } catch (err: any) {
+      console.error("Failed to delete car:", err);
+      alert("Error deleting vehicle: " + err.message);
+    }
   };
 
-  const handleExtendBooking = (bookingId: string) => {
-    setBookings(prev => prev.map(b => {
-      if (b.id !== bookingId) return b;
-      const currentEnd = new Date(b.endDate);
-      if (isNaN(currentEnd.getTime())) return b;
-      currentEnd.setDate(currentEnd.getDate() + 3);
-      const updatedEndDate = currentEnd.toISOString().split('T')[0];
-      
-      const foundCar = cars.find(c => c.id === b.carId);
-      const dailyRate = foundCar ? foundCar.price : 120;
-      const extraCost = dailyRate * 3;
-      
-      return {
-        ...b,
-        endDate: updatedEndDate,
-        totalPrice: b.totalPrice + extraCost
-      };
-    }));
+  const handleCancelBooking = async (bookingId: string) => {
+    if (!window.confirm("Are you sure you want to cancel this booking and delete it from your records?")) {
+      return;
+    }
+    try {
+      let token = "";
+      if (auth.currentUser) {
+        token = await auth.currentUser.getIdToken();
+      }
+      const response = await fetch(`/api/bookings/${bookingId}/cancel`, {
+        method: 'PUT',
+        headers: {
+          ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+        }
+      });
+      if (!response.ok) {
+        throw new Error('Database booking update failed.');
+      }
+      setBookings(prev => prev.filter(b => b.id !== bookingId));
+    } catch (err: any) {
+      console.error("Cancel booking error:", err);
+      alert("Failed to cancel trip: " + err.message);
+    }
   };
 
-  const handleBookingSuccess = (newBooking: Booking) => {
-    setBookings(prev => [newBooking, ...prev]);
-    // Also auto-route user to RENTALS after successful reservation
+  const handleExtendBooking = async (bookingId: string) => {
+    try {
+      let token = "";
+      if (auth.currentUser) {
+        token = await auth.currentUser.getIdToken();
+      }
+      const response = await fetch(`/api/bookings/${bookingId}/extend`, {
+        method: 'PUT',
+        headers: {
+          ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+        }
+      });
+      if (!response.ok) {
+        throw new Error('Database extension update failed.');
+      }
+      const updated = await response.json();
+      setBookings(prev => prev.map(b => b.id === bookingId ? updated : b));
+    } catch (err: any) {
+      console.error("Extend booking error:", err);
+      alert("Failed to extend trip: " + err.message);
+    }
+  };
+
+  const handleBookingSuccess = async (newBooking: Booking) => {
+    try {
+      let token = "";
+      if (auth.currentUser) {
+        token = await auth.currentUser.getIdToken();
+      }
+      const response = await fetch('/api/bookings', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+        },
+        body: JSON.stringify(newBooking)
+      });
+      if (!response.ok) {
+        throw new Error('Database was unable to persist reservation details.');
+      }
+      const saved = await response.json();
+      setBookings(prev => [saved, ...prev]);
+    } catch (err: any) {
+      console.error("Failed to persist booking, fallback to local state:", err);
+      setBookings(prev => [newBooking, ...prev]);
+    }
     setCurrentSection(AppSection.RENTALS);
   };
 
   // Launch direct Messenger workflow
-  const handleOpenChat = (car: Car) => {
+  const handleOpenChat = async (car: Car) => {
     if (!user) return;
 
     const existingSession = chatSessions.find(s => s.carId === car.id);
@@ -286,128 +508,123 @@ export default function App() {
       setSelectedSessionId(existingSession.id);
       setCurrentSection(AppSection.INBOX);
     } else {
-      // Create a brand new session with this dealer
-      const newSession: ChatSession = {
-        id: `chat_sess_${Date.now()}`,
-        carId: car.id,
-        userId: user.id,
-        dealerId: car.dealerId,
-        carName: `${car.brand} ${car.model}`,
-        carImage: car.images[0],
-        dealerName: car.dealerName,
-        dealerAvatar: car.dealerAvatar,
-        userName: user.name,
-        lastMessage: 'Chat started.',
-        timestamp: 'Just Now',
-        unread: false,
-        messages: [
-          {
-            id: `msg_${Date.now()}`,
-            senderId: car.dealerId,
-            senderName: car.dealerName,
-            text: `Welcome! Let us know how we can make your ${car.brand} ${car.model} experience perfect. We are here to help!`,
-            timestamp: 'Just Now'
-          }
-        ]
-      };
+      try {
+        let token = "";
+        if (auth.currentUser) {
+          token = await auth.currentUser.getIdToken();
+        }
+        const response = await fetch('/api/chats', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+          },
+          body: JSON.stringify({
+            vehicleId: car.id,
+            dealerId: car.dealerId
+          })
+        });
 
-      const updated = [newSession, ...chatSessions];
-      setChatSessions(updated);
-      setSelectedSessionId(newSession.id);
-      localStorage.setItem(`veloce_chats_${user.id}`, JSON.stringify(updated));
+        if (response.ok) {
+          const resData = await response.json();
+          const chatRes = await fetch('/api/chats', {
+            headers: {
+              ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+            }
+          });
+          if (chatRes.ok) {
+            const list = await chatRes.json();
+            setChatSessions(list);
+            setSelectedSessionId(resData.id);
+          }
+        }
+      } catch (err) {
+        console.error("Failed to start server conversation:", err);
+      }
       setCurrentSection(AppSection.INBOX);
     }
   };
 
-  const handleSendMessage = (sessionId: string, text: string) => {
+  const handleSendMessage = async (sessionId: string, text: string) => {
     if (!user) return;
 
-    const nextMsgId = `msg_${Date.now()}`;
-    const updated = chatSessions.map(sess => {
-      if (sess.id === sessionId) {
-        const nextMsg: ChatMessage = {
-          id: nextMsgId,
-          senderId: user.id,
-          senderName: user.name,
-          text,
-          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-          status: 'sent'
-        };
-        return {
-          ...sess,
-          lastMessage: text,
-          timestamp: 'Just Now',
-          messages: [...sess.messages, nextMsg]
-        };
+    try {
+      let token = "";
+      if (auth.currentUser) {
+        token = await auth.currentUser.getIdToken();
       }
-      return sess;
-    });
 
-    setChatSessions(updated);
-    localStorage.setItem(`veloce_chats_${user.id}`, JSON.stringify(updated));
-
-    // Simulate real-time read receipts (delivered, then seen)
-    setTimeout(() => {
-      setChatSessions(prevSessions => {
-        const nextSessions = prevSessions.map(sess => {
-          if (sess.id === sessionId) {
-            return {
-              ...sess,
-              messages: sess.messages.map(m => m.id === nextMsgId ? { ...m, status: 'delivered' } : m)
-            };
-          }
-          return sess;
-        });
-        localStorage.setItem(`veloce_chats_${user.id}`, JSON.stringify(nextSessions));
-        return nextSessions;
+      const response = await fetch(`/api/chats/${sessionId}/messages`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+        },
+        body: JSON.stringify({ text })
       });
-    }, 800);
 
-    setTimeout(() => {
-      setChatSessions(prevSessions => {
-        const nextSessions = prevSessions.map(sess => {
-          if (sess.id === sessionId) {
-            return {
-              ...sess,
-              messages: sess.messages.map(m => m.id === nextMsgId ? { ...m, status: 'seen' } : m)
-            };
-          }
-          return sess;
-        });
-        localStorage.setItem(`veloce_chats_${user.id}`, JSON.stringify(nextSessions));
-        return nextSessions;
-      });
-    }, 1800);
-  };
-
-  const handleReceiveSystemReply = (sessionId: string, text: string) => {
-    const updated = chatSessions.map(sess => {
-      if (sess.id === sessionId) {
-        const nextMsg: ChatMessage = {
-          id: `msg_sys_${Date.now()}`,
-          senderId: sess.dealerId,
-          senderName: sess.dealerName,
-          text,
-          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-        };
-        return {
-          ...sess,
-          lastMessage: text,
-          unread: true,
-          timestamp: 'Just Now',
-          messages: [...sess.messages, nextMsg]
-        };
+      if (response.ok) {
+        const newMsg = await response.json();
+        setChatSessions(prev =>
+          prev.map(sess => {
+            if (sess.id === sessionId) {
+              return {
+                ...sess,
+                lastMessage: text,
+                timestamp: 'Just Now',
+                messages: [...sess.messages, newMsg]
+              };
+            }
+            return sess;
+          })
+        );
       }
-      return sess;
-    });
-
-    setChatSessions(updated);
-    if (user) {
-      localStorage.setItem(`veloce_chats_${user.id}`, JSON.stringify(updated));
+    } catch (err) {
+      console.error("Failed to deliver message to server:", err);
     }
   };
 
-  const handleSelectSession = (id: string | null) => {
+  const handleReceiveSystemReply = async (sessionId: string, text: string) => {
+    if (!user) return;
+
+    try {
+      let token = "";
+      if (auth.currentUser) {
+        token = await auth.currentUser.getIdToken();
+      }
+
+      const response = await fetch(`/api/chats/${sessionId}/simulate`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+        },
+        body: JSON.stringify({ text })
+      });
+
+      if (response.ok) {
+        const incomingMsg = await response.json();
+        setChatSessions(prev =>
+          prev.map(sess => {
+            if (sess.id === sessionId) {
+              return {
+                ...sess,
+                lastMessage: text,
+                unread: true,
+                timestamp: 'Just Now',
+                messages: [...sess.messages, incomingMsg]
+              };
+            }
+            return sess;
+          })
+        );
+      }
+    } catch (err) {
+      console.error("Failed to simulate dealer auto reply on server:", err);
+    }
+  };
+
+  const handleSelectSession = async (id: string | null) => {
     setSelectedSessionId(id);
     if (!id) return;
     const updated = chatSessions.map(sess => {
@@ -417,6 +634,21 @@ export default function App() {
       return sess;
     });
     setChatSessions(updated);
+
+    try {
+      let token = "";
+      if (auth.currentUser) {
+        token = await auth.currentUser.getIdToken();
+      }
+      await fetch(`/api/chats/${id}/read`, {
+        method: 'PUT',
+        headers: {
+          ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+        }
+      });
+    } catch (err) {
+      console.error("Failed to mark session as read on server:", err);
+    }
   };
 
   const handleTriggerRentCheck = (car: Car) => {
@@ -446,7 +678,8 @@ export default function App() {
 
       {/* Application Screens Core Router layout - Full viewport on Explore, typical padding elsewhere */}
       <main id="app_main_container" className={`flex-1 w-full overflow-hidden relative z-10 flex flex-col ${
-        currentSection === AppSection.EXPLORE ? 'p-0 max-w-none' : 'max-w-7xl mx-auto p-4'
+        currentSection === AppSection.EXPLORE ? 'p-0 max-w-none' : 
+        currentSection === AppSection.MY_FLEET ? 'max-w-7xl mx-auto pt-1 px-4 pb-4' : 'max-w-7xl mx-auto p-4'
       }`}>
         <AnimatePresence mode="wait">
           <motion.div
@@ -511,7 +744,7 @@ export default function App() {
                         type="button"
                         id="view_bookings_part_btn"
                         onClick={() => setRentalsTabPart('bookings')}
-                        className={`relative z-10 w-1/2 py-2.5 text-center text-[10.5px] font-mono font-bold uppercase tracking-wider transition-colors duration-200 cursor-pointer ${
+                        className={`relative z-10 w-1/2 py-2.5 text-center text-[9px] xs:text-[10px] sm:text-[10.5px] font-mono font-bold uppercase tracking-tight xs:tracking-wider transition-colors duration-200 cursor-pointer ${
                           rentalsTabPart === 'bookings' ? 'text-emerald-400' : 'text-stone-500 hover:text-stone-300'
                         }`}
                       >
@@ -521,7 +754,7 @@ export default function App() {
                         type="button"
                         id="view_leaderboard_part_btn"
                         onClick={() => setRentalsTabPart('leaderboard')}
-                        className={`relative z-10 w-1/2 py-2.5 text-center text-[10.5px] font-mono font-bold uppercase tracking-wider transition-colors duration-200 cursor-pointer ${
+                        className={`relative z-10 w-1/2 py-2.5 text-center text-[9px] xs:text-[10px] sm:text-[10.5px] font-mono font-bold uppercase tracking-tight xs:tracking-wider transition-colors duration-200 cursor-pointer ${
                           rentalsTabPart === 'leaderboard' ? 'text-amber-400' : 'text-stone-500 hover:text-stone-300'
                         }`}
                       >
@@ -651,13 +884,13 @@ export default function App() {
                           { rank: 2, name: 'Ferrari 296 GTB', count: 142, img: 'https://images.unsplash.com/photo-1583121274602-3e2820c69888?q=80&w=120' },
                           { rank: 3, name: 'Toyota GR Supra', count: 119, img: 'https://images.unsplash.com/photo-1617814076367-b759c7d7e738?q=80&w=120' }
                         ].map(item => (
-                          <div key={item.rank} className="flex items-center justify-between p-3.5 md:p-4 bg-stone-900/30 rounded-xl border border-stone-850/60 font-sans">
-                            <div className="flex items-center gap-3">
-                              <span className="text-xs font-mono font-bold text-stone-500 w-4">{item.rank}</span>
-                              <img referrerPolicy="no-referrer" src={item.img} className="w-10 h-7 object-cover rounded border border-stone-800" alt={item.name} />
-                              <span className="text-xs font-medium text-stone-200">{item.name}</span>
+                          <div key={item.rank} className="flex items-center justify-between gap-3 p-3 sm:p-3.5 md:p-4 bg-stone-900/30 rounded-xl border border-stone-850/60 font-sans min-w-0">
+                            <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+                              <span className="text-[10px] sm:text-xs font-mono font-bold text-stone-500 w-4 shrink-0">{item.rank}</span>
+                              <img referrerPolicy="no-referrer" src={item.img} className="w-10 h-7 object-cover rounded border border-stone-800 shrink-0" alt={item.name} />
+                              <span className="text-[11px] sm:text-xs font-medium text-stone-200 truncate pr-1">{item.name}</span>
                             </div>
-                            <span className="text-xs font-mono text-stone-400 font-semibold">{item.count} sessions</span>
+                            <span className="text-[10px] sm:text-xs font-mono text-stone-400 font-semibold shrink-0 whitespace-nowrap text-right">{item.count} sessions</span>
                           </div>
                         ))}
                       </div>
@@ -679,13 +912,13 @@ export default function App() {
                           { rank: 2, name: 'Scuderia Club West', count: 215, avatar: 'https://images.unsplash.com/photo-1519085360753-af0119f7cbe7?q=80&w=120' },
                           { rank: 3, name: 'Alex\'s Track Prep', count: 168, avatar: 'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?q=80&w=120' }
                         ].map(item => (
-                          <div key={item.rank} className="flex items-center justify-between p-3.5 md:p-4 bg-stone-900/30 rounded-xl border border-stone-850/60 font-sans">
-                            <div className="flex items-center gap-3">
-                              <span className="text-xs font-mono font-bold text-stone-500 w-4">{item.rank}</span>
-                              <img referrerPolicy="no-referrer" src={item.avatar} className="w-7 h-7 object-cover rounded-full border border-stone-800" alt={item.name} />
-                              <span className="text-xs font-medium text-stone-200">{item.name}</span>
+                          <div key={item.rank} className="flex items-center justify-between gap-3 p-3 sm:p-3.5 md:p-4 bg-stone-900/30 rounded-xl border border-stone-850/60 font-sans min-w-0">
+                            <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+                              <span className="text-[10px] sm:text-xs font-mono font-bold text-stone-500 w-4 shrink-0">{item.rank}</span>
+                              <img referrerPolicy="no-referrer" src={item.avatar} className="w-7 h-7 object-cover rounded-full border border-stone-800 shrink-0" alt={item.name} />
+                              <span className="text-[11px] sm:text-xs font-medium text-stone-200 truncate pr-1">{item.name}</span>
                             </div>
-                            <span className="text-xs font-mono text-stone-400 font-semibold">{item.count} deals</span>
+                            <span className="text-[10px] sm:text-xs font-mono text-stone-400 font-semibold shrink-0 whitespace-nowrap text-right">{item.count} deals</span>
                           </div>
                         ))}
                       </div>
@@ -844,7 +1077,7 @@ export default function App() {
                     currentUser={user}
                     language={language}
                     theme={theme}
-                    onUserUpdate={(updatedUser) => setUser(updatedUser)}
+                    onUserUpdate={handleUserUpdate}
                   />
                 </div>
               </div>
@@ -859,6 +1092,7 @@ export default function App() {
                   language={language}
                   onUpdateCar={handleUpdateCar}
                   onAddNewCar={handleAddNewCar}
+                  onDeleteCar={handleDeleteCar}
                   onNavigateToExplore={() => setCurrentSection(AppSection.EXPLORE)}
                   onOpenChat={handleOpenChat}
                 />
@@ -891,7 +1125,7 @@ export default function App() {
                     onUnitChange={setUnit}
                     theme={theme}
                     onThemeChange={() => {}}
-                    onUserUpdate={(updatedUser) => setUser(updatedUser)}
+                    onUserUpdate={handleUserUpdate}
                     showKycModal={showKycModal}
                     onShowKycModalChange={setShowKycModal}
                     maxDistance={maxDistance}

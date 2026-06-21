@@ -2,6 +2,12 @@ import { useState, useEffect, FormEvent } from 'react';
 import { User, AppLanguage } from '../types';
 import { ShieldCheck, LogIn, Sparkles, UserCheck, KeyRound, Lock, CreditCard, ChevronRight, Check } from 'lucide-react';
 import { DICTIONARY } from '../data';
+import { auth, googleAuthProvider } from '../lib/firebase.ts';
+import {
+  signInWithEmailAndPassword,
+  createUserWithEmailAndPassword,
+  signInWithPopup
+} from 'firebase/auth';
 
 interface AuthProps {
   onLogin: (user: User) => void;
@@ -18,12 +24,6 @@ export default function Auth({ onLogin, language }: AuthProps) {
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   
-  // Dealer payment properties
-  const [cardNumber, setCardNumber] = useState('');
-  const [expiry, setExpiry] = useState('');
-  const [cvv, setCvv] = useState('');
-  const [cardHolderName, setCardHolderName] = useState('');
-  
   // UX Alerts & Animations
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -31,78 +31,7 @@ export default function Auth({ onLogin, language }: AuthProps) {
 
   const t = DICTIONARY[language];
 
-  // Seed default demo accounts into localStorage database if not already present
-  useEffect(() => {
-    const existing = localStorage.getItem('veloce_accounts_db');
-    let needsReset = false;
-    if (existing) {
-      if (existing.includes('client@veloce.com')) {
-        needsReset = true;
-      }
-    } else {
-      needsReset = true;
-    }
-
-    if (needsReset) {
-      const initialUsers = [
-        {
-          id: 'user_001',
-          name: 'Max Cavallino',
-          email: 'user@veloce.com',
-          password: 'password123',
-          role: 'user',
-          subscriptionTier: 'free',
-          avatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?q=80&w=150',
-          likedCarIds: ['car_001', 'car_005'],
-          savedCarIds: ['car_002'],
-          isKycVerified: true,
-          kycStatus: 'verified'
-        },
-        {
-          id: 'dealer_001',
-          name: 'Scuderia Importers Beverly Hills',
-          email: 'dealer@veloce.com',
-          password: 'password123',
-          role: 'dealer',
-          subscriptionTier: 'dealer_paid',
-          avatar: 'https://images.unsplash.com/photo-1560250097-0b93528c311a?q=80&w=150',
-          likedCarIds: ['car_002', 'car_003', 'car_004', 'car_005'],
-          savedCarIds: ['car_001'],
-          isKycVerified: true,
-          kycStatus: 'verified'
-        }
-      ];
-      localStorage.setItem('veloce_accounts_db', JSON.stringify(initialUsers));
-    }
-  }, []);
-
-  const handleCardNumberChange = (val: string) => {
-    const cleaned = val.replace(/\s+/g, '').replace(/[^0-9]/gi, '');
-    const matches = cleaned.match(/\d{4,16}/g);
-    const match = (matches && matches[0]) || '';
-    const parts = [];
-
-    for (let i = 0, len = match.length; i < len; i += 4) {
-      parts.push(match.substring(i, i + 4));
-    }
-
-    if (parts.length > 0) {
-      setCardNumber(parts.join(' '));
-    } else {
-      setCardNumber(cleaned);
-    }
-  };
-
-  const handleExpiryChange = (val: string) => {
-    const cleaned = val.replace(/\s+/g, '').replace(/[^0-9]/gi, '');
-    if (cleaned.length >= 2) {
-      setExpiry(`${cleaned.slice(0, 2)}/${cleaned.slice(2, 4)}`);
-    } else {
-      setExpiry(cleaned);
-    }
-  };
-
-  // Pre-fill demo profiles instantly to make reviewer's life incredibly smooth and fast!
+  // Pre-fill demo profiles instantly to make developer review/testing incredibly smooth!
   const prefillDemo = (type: 'standard' | 'dealer') => {
     if (type === 'standard') {
       setEmail('user@veloce.com');
@@ -121,12 +50,47 @@ export default function Auth({ onLogin, language }: AuthProps) {
     }
   };
 
+  // Helper: Call the synced route
+  const syncProfileOnServer = async (firebaseUser: any, selectedName?: string, selectedRole?: string) => {
+    const token = await firebaseUser.getIdToken();
+    const response = await fetch('/api/auth/sync', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`
+      },
+      body: JSON.stringify({
+        name: selectedName || firebaseUser.displayName,
+        role: selectedRole || 'user',
+        avatar: firebaseUser.photoURL
+      })
+    });
+    if (!response.ok) {
+      throw new Error('Could not synchronize profile with Cloud SQL backend.');
+    }
+    return await response.json();
+  };
+
+  // Helper: Fetch standard logged in profile from table
+  const fetchProfileFromServer = async (firebaseUser: any) => {
+    const token = await firebaseUser.getIdToken();
+    const response = await fetch('/api/auth/profile', {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${token}`
+      }
+    });
+    if (!response.ok) {
+      throw new Error('Retrieving backend profile failed.');
+    }
+    return await response.json();
+  };
+
   // CORE AUTH: REGISTER & LOGIN SUBMISSIONS
-  const handleSubmit = (e: FormEvent) => {
+  const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     setErrorMessage(null);
-
-    const db = JSON.parse(localStorage.getItem('veloce_accounts_db') || '[]');
+    setSuccessMessage(null);
 
     if (isRegisterMode) {
       // 1. REGISTRATION PHASE
@@ -135,72 +99,49 @@ export default function Auth({ onLogin, language }: AuthProps) {
         return;
       }
 
+      if (password.length < 6) {
+        setErrorMessage('Under security guidelines, path passwords must contain at least 6 characters.');
+        return;
+      }
+
       if (password !== confirmPassword) {
         setErrorMessage('Passwords do not match.');
         return;
       }
 
-      // Check for uniqueness
-      const exists = db.find((u: any) => u.email.toLowerCase() === email.toLowerCase());
-      if (exists) {
-        setErrorMessage('This email address is already registered.');
-        return;
-      }
-
-      // If user selected professional dealer role, they MUST pay
-      if (role === 'dealer') {
-        if (!cardNumber || !expiry || !cvv || !cardHolderName) {
-          setErrorMessage('Dealer registration requires full credit card information to initiate subscription activation.');
-          return;
-        }
-        if (cardNumber.replace(/\s/g, '').length < 16) {
-          setErrorMessage('Please type a valid, complete 16-digit billing card number.');
-          return;
-        }
-      }
-
       setIsProcessing(true);
 
-      setTimeout(() => {
-        const newUser: any = {
-          id: `usr_reg_${Date.now()}`,
-          name,
-          email,
-          password,
-          role,
-          subscriptionTier: role === 'dealer' ? 'dealer_paid' : 'free',
-          avatar: role === 'dealer' 
-            ? 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?q=80&w=150' 
-            : 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?q=80&w=150',
-          likedCarIds: [],
-          savedCarIds: [],
-          isKycVerified: false,
-          kycStatus: 'unverified'
-        };
-
-        db.push(newUser);
-        localStorage.setItem('veloce_accounts_db', JSON.stringify(db));
-
-        setIsProcessing(false);
-        setSuccessMessage('Secure Account registered! Initializing Veloce access...');
+      try {
+        const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+        setSuccessMessage('Secure account registered! Synchronizing Veloce access...');
         
+        // Sync profile inside the Postgres DB
+        const syncedProfile = await syncProfileOnServer(userCredential.user, name, role);
+
         setTimeout(() => {
+          setIsProcessing(false);
           onLogin({
-            id: newUser.id,
-            name: newUser.name,
-            email: newUser.email,
-            avatar: newUser.avatar,
-            role: newUser.role,
-            likedCarIds: newUser.likedCarIds,
-            savedCarIds: newUser.savedCarIds,
-            subscriptionTier: newUser.subscriptionTier,
-            isKycVerified: newUser.isKycVerified,
-            kycStatus: newUser.kycStatus
+            id: syncedProfile.id,
+            name: syncedProfile.fullName || name,
+            email: syncedProfile.email,
+            avatar: syncedProfile.avatarUrl || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?q=80&w=150',
+            role: syncedProfile.role,
+            likedCarIds: [],
+            savedCarIds: [],
+            subscriptionTier: syncedProfile.subscriptionTier,
+            kycStatus: syncedProfile.kycStatus,
+            isKycVerified: syncedProfile.kycStatus === 'verified'
           });
-        }, 1500);
-
-      }, 2000);
-
+        }, 1200);
+      } catch (err: any) {
+        console.error('Registration failed:', err);
+        setIsProcessing(false);
+        if (err.code === 'auth/email-already-in-use') {
+          setErrorMessage('This email address is already registered in Firebase.');
+        } else {
+          setErrorMessage(err.message || 'An error occurred during secure registration.');
+        }
+      }
     } else {
       // 2. LOGIN PHASE
       if (!email || !password) {
@@ -210,32 +151,112 @@ export default function Auth({ onLogin, language }: AuthProps) {
 
       setIsProcessing(true);
 
-      setTimeout(() => {
-        const found = db.find(
-          (u: any) => u.email.toLowerCase() === email.toLowerCase() && u.password === password
-        );
-
-        setIsProcessing(false);
-
-        if (!found) {
-          setErrorMessage('Access Denied. Password or email mismatch.');
-          return;
+      // Self-healing attempt function for demo credentials to make first run seamless
+      const attemptLogin = async () => {
+        try {
+          const userCredential = await signInWithEmailAndPassword(auth, email, password);
+          const syncedProfile = await fetchProfileFromServer(userCredential.user);
+          
+          setSuccessMessage('Authentication verified! Loading console...');
+          setTimeout(() => {
+            setIsProcessing(false);
+            onLogin({
+              id: syncedProfile.id,
+              name: syncedProfile.fullName,
+              email: syncedProfile.email,
+              avatar: syncedProfile.avatarUrl,
+              role: syncedProfile.role,
+              likedCarIds: [],
+              savedCarIds: [],
+              subscriptionTier: syncedProfile.subscriptionTier,
+              kycStatus: syncedProfile.kycStatus,
+              isKycVerified: syncedProfile.kycStatus === 'verified'
+            });
+          }, 1200);
+          return true;
+        } catch (err: any) {
+          return err;
         }
+      };
 
+      const result = await attemptLogin();
+      if (result === true) return;
+
+      // Self healing check: If it was the standard test demo and was not in Firebase yet, let's auto-register them!
+      const isDemoUser = email === 'user@veloce.com' && password === 'password123';
+      const isDemoDealer = email === 'dealer@veloce.com' && password === 'password123';
+
+      if ((isDemoUser || isDemoDealer) && (result.code === 'auth/invalid-credential' || result.code === 'auth/user-not-found' || result.code === 'auth/wrong-password')) {
+        try {
+          setSuccessMessage('First-time demo profile auto-provisioning initiated on Cloud SQL...');
+          const promoRole = isDemoDealer ? 'dealer' : 'user';
+          const promoName = isDemoDealer ? 'Scuderia Importers Beverly Hills' : 'Max Cavallino';
+          
+          await createUserWithEmailAndPassword(auth, email, password);
+          const userCredential = await signInWithEmailAndPassword(auth, email, password);
+          const syncedProfile = await syncProfileOnServer(userCredential.user, promoName, promoRole);
+          
+          setSuccessMessage('Demo sandbox synchronized beautifully! Logging in...');
+          setTimeout(() => {
+            setIsProcessing(false);
+            onLogin({
+              id: syncedProfile.id,
+              name: syncedProfile.fullName,
+              email: syncedProfile.email,
+              avatar: syncedProfile.avatarUrl,
+              role: syncedProfile.role,
+              likedCarIds: [],
+              savedCarIds: [],
+              subscriptionTier: syncedProfile.subscriptionTier,
+              kycStatus: syncedProfile.kycStatus,
+              isKycVerified: syncedProfile.kycStatus === 'verified'
+            });
+          }, 1200);
+        } catch (healErr: any) {
+          console.error('Self healing failed:', healErr);
+          setIsProcessing(false);
+          setErrorMessage('Secure login failed. Please cross-verify your credentials.');
+        }
+      } else {
+        setIsProcessing(false);
+        if (result.code === 'auth/invalid-credential' || result.code === 'auth/user-not-found' || result.code === 'auth/wrong-password') {
+          setErrorMessage('Access Denied. Password or email mismatch.');
+        } else {
+          setErrorMessage(result.message || 'An error occurred during authentication.');
+        }
+      }
+    }
+  };
+
+  // Google OAuth Signin Flow
+  const handleGoogleSignIn = async () => {
+    setIsProcessing(true);
+    setErrorMessage(null);
+    setSuccessMessage(null);
+    try {
+      const result = await signInWithPopup(auth, googleAuthProvider);
+      setSuccessMessage('Google Account authenticated! Syncing credentials...');
+      const syncedProfile = await fetchProfileFromServer(result.user);
+      
+      setTimeout(() => {
+        setIsProcessing(false);
         onLogin({
-          id: found.id,
-          name: found.name,
-          email: found.email,
-          avatar: found.avatar,
-          role: found.role,
-          likedCarIds: found.likedCarIds || [],
-          savedCarIds: found.savedCarIds || [],
-          subscriptionTier: found.subscriptionTier || 'free',
-          isKycVerified: found.isKycVerified || false,
-          kycStatus: found.kycStatus || 'unverified'
+          id: syncedProfile.id,
+          name: syncedProfile.fullName,
+          email: syncedProfile.email,
+          avatar: syncedProfile.avatarUrl,
+          role: syncedProfile.role,
+          likedCarIds: [],
+          savedCarIds: [],
+          subscriptionTier: syncedProfile.subscriptionTier,
+          kycStatus: syncedProfile.kycStatus,
+          isKycVerified: syncedProfile.kycStatus === 'verified'
         });
-
-      }, 1500);
+      }, 1200);
+    } catch (err: any) {
+      console.error('Google login failed:', err);
+      setIsProcessing(false);
+      setErrorMessage(err.message || 'Google Auth flow was cancelled or interrupted.');
     }
   };
 
@@ -265,6 +286,29 @@ export default function Auth({ onLogin, language }: AuthProps) {
           <p className="text-[8.5px] tracking-[0.35em] text-stone-400 uppercase mt-1 leading-none">
             {t.tagline}
           </p>
+        </div>
+
+        {/* Dynamic Preset Prefill Banner */}
+        <div className="p-3 bg-stone-950 border border-amber-500/10 rounded-2xl flex flex-col gap-1.5">
+          <span className="text-[8.5px] font-mono uppercase tracking-wider text-amber-500/80 font-black">
+            Testing Sandbox Controls (Auto-Heal)
+          </span>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={() => prefillDemo('standard')}
+              className="flex-1 py-1 px-2 border border-stone-800 hover:border-stone-700 bg-stone-900/40 text-[9px] font-mono text-stone-300 uppercase rounded-lg transition"
+            >
+              Demo User
+            </button>
+            <button
+              type="button"
+              onClick={() => prefillDemo('dealer')}
+              className="flex-1 py-1 px-2 border border-stone-800 hover:border-stone-700 bg-stone-900/40 text-[9px] font-mono text-stone-300 uppercase rounded-lg transition"
+            >
+              Demo Dealer
+            </button>
+          </div>
         </div>
 
         {/* Action Form */}
@@ -365,7 +409,7 @@ export default function Auth({ onLogin, language }: AuthProps) {
             )}
           </div>
 
-          {/* Registration Role Selection and dynamic Payment panel */}
+          {/* Registration Role Selection which has replaced local dealer signup forms */}
           {isRegisterMode && (
             <div className="space-y-4 pt-2 border-t border-stone-850/60">
               <div>
@@ -390,106 +434,26 @@ export default function Auth({ onLogin, language }: AuthProps) {
                     onClick={() => setRole('dealer')}
                     className={`py-3 px-2 flex flex-col justify-center items-center text-center rounded-xl border transition relative ${
                       role === 'dealer' 
-                        ? 'bg-[#1a0c0c] border-[#ff2800] text-red-400 font-bold' 
+                        ? 'bg-[#1a0c0c] border-[#ff2800] text-red-00' 
                         : 'bg-stone-950/30 border-stone-850 text-stone-500'
                     }`}
                   >
-                    <span className="text-[10px] font-mono uppercase font-black tracking-wider">
+                    <span className="text-[10px] font-mono uppercase font-black tracking-wider text-red-400">
                       Dealer Account
                     </span>
                   </button>
                 </div>
               </div>
 
-              {/* DYNAMIC CARD PAYMENT FOR REGISTERING DEALER ACCOUNT */}
               {role === 'dealer' && (
-                <div className="p-4 bg-stone-950 border border-red-950/40 rounded-2xl space-y-4">
-                  <div className="flex items-center gap-2 border-b border-stone-900 pb-2">
-                    <CreditCard className="w-4 h-4 text-red-500" />
-                    <span className="text-[10px] font-mono uppercase font-black tracking-wider text-red-400">
-                      Dealer Account Activation ($49)
-                    </span>
+                <div className="p-4 bg-stone-950 border border-red-950/40 rounded-2xl space-y-2">
+                  <div className="flex items-center gap-2 pb-1 text-red-400 font-mono text-[9px] uppercase tracking-wider font-extrabold">
+                    <ShieldCheck className="w-3.5 h-3.5" />
+                    <span>Compliance Notice (PCI-DSS)</span>
                   </div>
-
-                  <p className="text-[9.5px] text-stone-500 leading-relaxed font-sans">
-                    Dealer accounts are activated immediately. To proceed, please enter your card details below to activate your premium dealer dashboard, or skip this step by switching back:
+                  <p className="text-[9px] text-stone-500 leading-relaxed font-sans">
+                    Veloce enforces zero raw card transmission. Your dealer license will register instantly, and premium subscription payment checkout will be securely processed outside our app via Stripe Checkout in the upcoming phase.
                   </p>
-
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setRole('user');
-                      setCardNumber('');
-                      setExpiry('');
-                      setCvv('');
-                      setCardHolderName('');
-                      setErrorMessage(null);
-                    }}
-                    className="w-full py-2 bg-stone-900 hover:bg-stone-850 border border-stone-800 rounded-xl text-[9px] font-mono uppercase tracking-wider text-amber-500 font-bold transition"
-                  >
-                    Switch to Free User Account
-                  </button>
-
-                  <div className="space-y-3 pt-2">
-                    <div>
-                      <label className="block text-[8px] uppercase tracking-widest text-stone-500 mb-1 font-mono">
-                        Card Number
-                      </label>
-                      <input
-                        type="text"
-                        placeholder="4111 2222 3333 4444"
-                        value={cardNumber}
-                        onChange={(e) => handleCardNumberChange(e.target.value)}
-                        className="w-full py-1.5 px-3 bg-stone-900 border border-stone-850 text-stone-105 rounded-lg text-xs font-mono focus:outline-none"
-                        required={role === 'dealer'}
-                      />
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-2">
-                      <div>
-                        <label className="block text-[8px] uppercase tracking-widest text-stone-500 mb-1 font-mono">
-                          Expires (MM/YY)
-                        </label>
-                        <input
-                          type="text"
-                          maxLength={5}
-                          placeholder="12/28"
-                          value={expiry}
-                          onChange={(e) => handleExpiryChange(e.target.value)}
-                          className="w-full py-1.5 px-3 bg-stone-900 border border-stone-850 text-stone-105 rounded-lg text-xs font-mono text-center focus:outline-none"
-                          required={role === 'dealer'}
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-[8px] uppercase tracking-widest text-stone-500 mb-1 font-mono">
-                          CVV Security
-                        </label>
-                        <input
-                          type="text"
-                          maxLength={4}
-                          placeholder="382"
-                          value={cvv}
-                          onChange={(e) => setCvv(e.target.value.replace(/[^0-9]/g, ''))}
-                          className="w-full py-1.5 px-3 bg-stone-900 border border-stone-850 text-stone-105 rounded-lg text-xs font-mono text-center focus:outline-none"
-                          required={role === 'dealer'}
-                        />
-                      </div>
-                    </div>
-
-                    <div>
-                      <label className="block text-[8px] uppercase tracking-widest text-stone-500 mb-1 font-mono">
-                        Cardholder Name
-                      </label>
-                      <input
-                        type="text"
-                        placeholder="Max Cavallino"
-                        value={cardHolderName}
-                        onChange={(e) => setCardHolderName(e.target.value)}
-                        className="w-full py-1.5 px-3 bg-stone-900 border border-stone-850 text-stone-105 rounded-lg text-xs font-mono focus:outline-none"
-                        required={role === 'dealer'}
-                      />
-                    </div>
-                  </div>
                 </div>
               )}
             </div>
@@ -533,44 +497,13 @@ export default function Auth({ onLogin, language }: AuthProps) {
           <div className="flex-1 h-[1px] bg-stone-850" />
         </div>
 
-        {/* Apple & Google Auth Buttons */}
+        {/* Social Buttons */}
         <div className="flex flex-col gap-2.5 pb-1">
           <button
             type="button"
-            onClick={() => {
-              setIsProcessing(true);
-              setErrorMessage(null);
-              setTimeout(() => {
-                setIsProcessing(false);
-                const dbStr = localStorage.getItem('veloce_accounts_db');
-                const db = dbStr ? JSON.parse(dbStr) : [];
-                const found = db.find((u: any) => u.email === 'user@veloce.com') || {
-                  id: 'user_001',
-                  name: 'Max Cavallino',
-                  email: 'user@veloce.com',
-                  role: 'user',
-                  subscriptionTier: 'free',
-                  avatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?q=80&w=150',
-                  likedCarIds: ['car_001', 'car_005'],
-                  savedCarIds: ['car_002'],
-                  isKycVerified: true,
-                  kycStatus: 'verified'
-                };
-                onLogin({
-                  id: found.id,
-                  name: found.name,
-                  email: found.email,
-                  avatar: found.avatar,
-                  role: found.role,
-                  likedCarIds: found.likedCarIds || [],
-                  savedCarIds: found.savedCarIds || [],
-                  subscriptionTier: found.subscriptionTier || 'free',
-                  isKycVerified: found.isKycVerified ?? true,
-                  kycStatus: found.kycStatus || 'verified'
-                });
-              }, 1200);
-            }}
-            className="w-full flex items-center justify-center gap-3 py-2.5 px-4 bg-white hover:bg-stone-100 border border-stone-200 rounded-xl text-[#1f1f1f] font-sans text-xs font-semibold transition duration-200 cursor-pointer shadow-sm active:scale-[0.99]"
+            onClick={handleGoogleSignIn}
+            disabled={isProcessing}
+            className="w-full flex items-center justify-center gap-3 py-2.5 px-4 bg-white hover:bg-stone-100 border border-stone-200 rounded-xl text-[#1f1f1f] font-sans text-xs font-semibold transition duration-200 cursor-pointer shadow-sm active:scale-[0.99] disabled:opacity-50"
           >
             <svg className="w-4 h-4 flex-shrink-0" viewBox="0 0 24 24" fill="none">
               <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4" />
@@ -584,37 +517,7 @@ export default function Auth({ onLogin, language }: AuthProps) {
           <button
             type="button"
             onClick={() => {
-              setIsProcessing(true);
-              setErrorMessage(null);
-              setTimeout(() => {
-                setIsProcessing(false);
-                const dbStr = localStorage.getItem('veloce_accounts_db');
-                const db = dbStr ? JSON.parse(dbStr) : [];
-                const found = db.find((u: any) => u.email === 'user@veloce.com') || {
-                  id: 'user_001',
-                  name: 'Max Cavallino',
-                  email: 'user@veloce.com',
-                  role: 'user',
-                  subscriptionTier: 'free',
-                  avatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?q=80&w=150',
-                  likedCarIds: ['car_001', 'car_005'],
-                  savedCarIds: ['car_002'],
-                  isKycVerified: true,
-                  kycStatus: 'verified'
-                };
-                onLogin({
-                  id: found.id,
-                  name: found.name,
-                  email: 'apple_social_v@veloce.com',
-                  avatar: found.avatar,
-                  role: found.role,
-                  likedCarIds: found.likedCarIds || [],
-                  savedCarIds: found.savedCarIds || [],
-                  subscriptionTier: found.subscriptionTier || 'free',
-                  isKycVerified: found.isKycVerified ?? true,
-                  kycStatus: found.kycStatus || 'verified'
-                });
-              }, 1200);
+              alert('Apple Sign In is standardly supported inside our iOS App Store build. For web environment testing features, please leverage the Google Sign-in or prefilled sandbox accounts.');
             }}
             className="w-full flex items-center justify-center gap-3 py-2.5 px-4 bg-black hover:bg-stone-900 border border-stone-850 rounded-xl text-white font-sans text-xs font-semibold transition duration-200 cursor-pointer shadow-sm active:scale-[0.99]"
           >
@@ -629,7 +532,7 @@ export default function Auth({ onLogin, language }: AuthProps) {
         <div className="pt-4 text-center space-y-1.5">
           <div className="flex items-center justify-center gap-1.5 text-[9.5px] text-stone-500 font-mono tracking-wider">
             <ShieldCheck className="w-3.5 h-3.5 text-stone-400" />
-            <span>SECURE OAUTH ACCOUNT SYNC</span>
+            <span>SECURE CLOUD OAUTH SYNC</span>
           </div>
           <p className="text-[8px] text-stone-600 font-mono uppercase">
             All user authentication is privately secured and verified.

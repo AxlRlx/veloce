@@ -15,6 +15,7 @@ interface MyFleetProps {
   language: AppLanguage;
   onUpdateCar: (updatedCar: Car) => void;
   onAddNewCar: (newCar: Car) => void;
+  onDeleteCar?: (carId: string) => void;
   onNavigateToExplore: () => void;
   onOpenChat: (car: Car) => void;
 }
@@ -26,6 +27,7 @@ export default function MyFleet({
   language,
   onUpdateCar,
   onAddNewCar,
+  onDeleteCar,
   onNavigateToExplore,
   onOpenChat
 }: MyFleetProps) {
@@ -34,6 +36,9 @@ export default function MyFleet({
 
   // Active sub-navigation inside My Fleet
   const [activeTab, setActiveTab] = useState<'inventory' | 'analytics'>('inventory');
+
+  // State to track if we are in Edit mode
+  const [editingCar, setEditingCar] = useState<Car | null>(null);
 
   // Currently editing car for availability range
   const [selectedCarId, setSelectedCarId] = useState<string | null>(null);
@@ -117,6 +122,20 @@ export default function MyFleet({
     onUpdateCar(updated);
   };
 
+  const startEditing = (car: Car) => {
+    setEditingCar(car);
+    setQuickBrand(car.brand);
+    setQuickModel(car.model);
+    setQuickYear(car.year.toString());
+    setQuickPrice(car.price.toString());
+    setQuickType(car.type);
+    setQuickDesc(car.description);
+    setQuickMileage(car.mileage?.toString() || '12000');
+    setQuickEngineSize(car.engine?.replace(/^\d+HP\s*/, '') || '4.0L');
+    setQuickImages(car.images);
+    setShowQuickAdd(true);
+  };
+
   const handleQuickAddSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!quickBrand || !quickModel) return;
@@ -126,41 +145,60 @@ export default function MyFleet({
       return;
     }
 
-    const isFree = (!currentUser.subscriptionTier || currentUser.subscriptionTier === 'free') && currentUser.role !== 'dealer';
-    if (isFree && myCars.length >= 2) {
-      alert("Standard Free accounts can list up to 2 vehicles. Please upgrade your tier in the Profile tab to list more.");
-      return;
+    if (editingCar) {
+      const updated: Car = {
+        ...editingCar,
+        brand: quickBrand,
+        model: quickModel,
+        year: parseInt(quickYear) || 2025,
+        images: quickImages,
+        price: parseFloat(quickPrice) || 150,
+        type: quickType,
+        description: quickDesc,
+        mileage: parseInt(quickMileage) || 12000,
+        engine: `${editingCar.power || 450}HP ${quickEngineSize || '4.0L'}`
+      };
+      onUpdateCar(updated);
+      setEditingCar(null);
+    } else {
+      const isFree = (!currentUser.subscriptionTier || currentUser.subscriptionTier === 'free') && currentUser.role !== 'dealer';
+      if (isFree && myCars.length >= 2) {
+        alert("Standard Free accounts can list up to 2 vehicles. Please upgrade your tier in the Profile tab to list more.");
+        return;
+      }
+
+      const newCar: Car = {
+        id: `car_fleet_${Date.now()}`,
+        brand: quickBrand,
+        model: quickModel,
+        year: parseInt(quickYear) || 2025,
+        images: quickImages,
+        price: parseFloat(quickPrice) || 150,
+        type: quickType,
+        transmission: 'Dual-Clutch automatic',
+        engine: quickEngineSize || '4.0L',
+        power: 580,
+        acceleration: '3.2s',
+        topSpeed: 315,
+        location: 'Beverly Hills, CA',
+        distance: 2.1,
+        rating: 5.0,
+        description: quickDesc || 'High performance premium luxury automobile, perfect for open highway drives.',
+        features: ['Apple CarPlay Enabled', 'Premium Alcantara sport seating', 'Comprehensive telemetry dashboard'],
+        dealerId: currentUser.id,
+        dealerName: currentUser.name,
+        dealerAvatar: currentUser.avatar,
+        insuranceLevel: 'basic',
+        reviews: [],
+        mileage: parseInt(quickMileage) || 12000,
+        engineSize: quickEngineSize || '4.0L',
+        engineShape: '',
+        status: 'draft' // Flow starts in draft status per constraints
+      };
+
+      onAddNewCar(newCar);
     }
 
-    const newCar: Car = {
-      id: `car_fleet_${Date.now()}`,
-      brand: quickBrand,
-      model: quickModel,
-      year: parseInt(quickYear) || 2025,
-      images: quickImages,
-      price: parseFloat(quickPrice) || 150,
-      type: quickType,
-      transmission: 'Dual-Clutch automatic',
-      engine: quickEngineSize || '4.0L',
-      power: 580,
-      acceleration: '3.2s',
-      topSpeed: 315,
-      location: 'Culver City, CA',
-      distance: 2.1,
-      rating: 5.0,
-      description: quickDesc || 'High performance premium luxury automobile, perfect for open highway drives.',
-      features: ['Apple CarPlay Enabled', 'Premium Alcantara sport seating', 'Comprehensive telemetry dashboard'],
-      dealerId: currentUser.id,
-      dealerName: currentUser.name,
-      dealerAvatar: currentUser.avatar,
-      insuranceLevel: 'basic',
-      reviews: [],
-      mileage: parseInt(quickMileage) || 12000,
-      engineSize: quickEngineSize || '4.0L',
-      engineShape: ''
-    };
-
-    onAddNewCar(newCar);
     setShowQuickAdd(false);
     setQuickBrand('');
     setQuickModel('');
@@ -209,15 +247,18 @@ export default function MyFleet({
   ];
 
   return (
-    <div className="w-full max-w-6xl mx-auto px-1 py-4 space-y-6">
+    <div className="w-full max-w-6xl mx-auto px-1 pt-0 pb-4 space-y-4 relative">
       
-      <button 
-        onClick={onNavigateToExplore}
-        className="flex items-center text-stone-500 hover:text-stone-300 transition-colors cursor-pointer self-start mb-1"
-        title="Back"
-      >
-        <ChevronLeft className="w-5 h-5" />
-      </button>
+      {/* Sticky floating back button that doesn't block layout flow */}
+      <div className="sticky top-0 z-50 h-0 relative w-full">
+        <button 
+          onClick={onNavigateToExplore}
+          className="absolute -top-1.5 -left-3 sm:-left-4 z-50 flex items-center justify-center w-7 h-7 text-stone-400 hover:text-stone-200 transition-all cursor-pointer"
+          title="Back"
+        >
+          <ChevronLeft className="w-5 h-5" />
+        </button>
+      </div>
 
       {/* Header and statistics */}
       <div className="flex flex-col items-center text-center pb-4 border-b border-stone-900 gap-4">
@@ -259,14 +300,28 @@ export default function MyFleet({
       {activeTab === 'inventory' && (
         <div className="space-y-6">
           <div className="flex items-center justify-between pb-1">
-            <h3 className="text-xs font-mono uppercase text-stone-400 tracking-wider">Current Fleet</h3>
+            <h3 className="text-xs font-mono uppercase text-stone-400 tracking-wider">
+              {editingCar ? `✏️ Editing ${editingCar.brand} ${editingCar.model}` : "Current Fleet"}
+            </h3>
             <button
               type="button"
-              onClick={() => setShowQuickAdd(!showQuickAdd)}
+              onClick={() => {
+                if (showQuickAdd) {
+                  // Closing form, clear edit mode
+                  setEditingCar(null);
+                  setQuickBrand('');
+                  setQuickModel('');
+                  setQuickDesc('');
+                  setQuickMileage('');
+                  setQuickEngineSize('');
+                  setQuickImages([]);
+                }
+                setShowQuickAdd(!showQuickAdd);
+              }}
               className="py-1.5 px-3 bg-amber-500 hover:bg-amber-450 text-stone-950 rounded-lg text-[9px] font-mono font-extrabold uppercase tracking-wider flex items-center gap-1 cursor-pointer transition-colors"
             >
               <Plus className="w-3.5 h-3.5" />
-              <span>Add a Vehicle</span>
+              <span>{editingCar ? "Cancel Edit" : showQuickAdd ? "Close Form" : "Add a Vehicle"}</span>
             </button>
           </div>
 
@@ -452,7 +507,7 @@ export default function MyFleet({
                             : 'bg-amber-500 hover:bg-amber-450 text-stone-950 cursor-pointer shadow-lg shadow-amber-500/10'
                         }`}
                       >
-                        Publish Listing
+                        {editingCar ? "Update Listing" : "Publish Listing"}
                       </button>
                     </div>
                   </div>
@@ -580,18 +635,90 @@ export default function MyFleet({
                         </div>
                       </div>
                     ) : (
-                      <div className="pt-1.5">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setSelectedCarId(car.id);
-                            setStartDateStr(car.rentAvailableStart || '2026-06-15');
-                            setEndDateStr(car.rentAvailableEnd || '2026-06-25');
-                          }}
-                          className="py-1 px-3 bg-stone-850 hover:bg-stone-800 text-stone-300 rounded border border-stone-800 text-[8.5px] font-mono uppercase font-bold cursor-pointer transition-colors"
-                        >
-                          Configure Availability Range
-                        </button>
+                      <div className="pt-2 flex flex-col gap-2 border-t border-stone-900 mt-2">
+                        <div className="flex flex-wrap gap-1.5 items-center justify-between">
+                          <span className="text-[8.5px] font-mono uppercase text-stone-500 font-bold block">
+                            Listing Status:
+                          </span>
+                          <div className="flex items-center gap-1.5">
+                            <span className={`text-[8.5px] font-mono uppercase font-black px-2 py-0.5 rounded ${
+                              car.status === 'active' 
+                                ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' 
+                                : car.status === 'pending_review' 
+                                  ? 'bg-amber-500/10 text-amber-500 border border-amber-500/25 animate-pulse'
+                                  : 'bg-stone-805 text-stone-400 border border-stone-800'
+                            }`}>
+                              {car.status || 'draft'}
+                            </span>
+
+                            {(!car.status || car.status === 'draft') && (
+                              <button
+                                type="button"
+                                onClick={() => onUpdateCar({ ...car, status: 'pending_review' })}
+                                className="py-0.5 px-2 bg-stone-800 hover:bg-stone-700 text-stone-300 hover:text-white rounded text-[8px] font-mono uppercase font-bold cursor-pointer border border-stone-750 transition"
+                                title="Submit listing for verification check"
+                              >
+                                Submit Review
+                              </button>
+                            )}
+
+                            {car.status === 'pending_review' && (
+                              <button
+                                type="button"
+                                onClick={() => onUpdateCar({ ...car, status: 'active' })}
+                                className="py-0.5 px-2 bg-amber-500 hover:bg-amber-450 text-stone-950 font-black rounded text-[8px] font-mono uppercase cursor-pointer transition"
+                                title="Approve under demo environment sandbox privileges"
+                              >
+                                Approve/List
+                              </button>
+                            )}
+
+                            {car.status === 'active' && (
+                              <button
+                                type="button"
+                                onClick={() => onUpdateCar({ ...car, status: 'draft' })}
+                                className="py-0.5 px-2 bg-stone-850 hover:bg-rose-950 text-stone-400 hover:text-rose-200 rounded text-[8px] font-mono uppercase cursor-pointer transition border border-stone-800 hover:border-rose-900"
+                                title="Deactivate listing to draft mode"
+                              >
+                                Deactivate
+                              </button>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="flex gap-2 pt-1 border-t border-stone-900/60 mt-1">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelectedCarId(car.id);
+                              setStartDateStr(car.rentAvailableStart || '2026-06-15');
+                              setEndDateStr(car.rentAvailableEnd || '2026-06-25');
+                            }}
+                            className="flex-1 py-1 px-2.5 bg-stone-850 hover:bg-stone-800 text-stone-300 rounded border border-stone-800 text-[8.5px] font-mono uppercase font-bold cursor-pointer transition-colors text-center"
+                          >
+                            Set Rent Window
+                          </button>
+                          
+                          <button
+                            type="button"
+                            onClick={() => startEditing(car)}
+                            className="py-1 px-3 bg-stone-850 hover:bg-amber-500 hover:text-stone-950 text-stone-300 rounded border border-stone-800 text-[8.5px] font-mono uppercase font-bold cursor-pointer transition-all"
+                            title="Edit Listing details"
+                          >
+                            Edit
+                          </button>
+
+                          {onDeleteCar && (
+                            <button
+                              type="button"
+                              onClick={() => onDeleteCar(car.id)}
+                              className="py-1 px-3 bg-stone-850 hover:bg-rose-950 hover:text-rose-250 text-stone-400 rounded border border-stone-800 text-[8.5px] font-mono uppercase font-bold cursor-pointer transition-colors"
+                              title="Delete Listing permanently"
+                            >
+                              Delete
+                            </button>
+                          )}
+                        </div>
                       </div>
                     )}
                   </div>

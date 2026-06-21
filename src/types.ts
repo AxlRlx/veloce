@@ -54,6 +54,7 @@ export interface Car {
   engineShape?: string;
   rentAvailableStart?: string;
   rentAvailableEnd?: string;
+  status?: 'draft' | 'pending_review' | 'active' | 'rejected' | 'sold' | 'rented';
 }
 
 export interface Booking {

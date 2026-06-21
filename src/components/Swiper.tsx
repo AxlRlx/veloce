@@ -1,5 +1,6 @@
 import { useState, useEffect, MouseEvent, FormEvent } from 'react';
 import { Car, AppLanguage, Review, User, COMMON_BRANDS_MODELS } from '../types';
+import { auth } from '../lib/firebase';
 import { DICTIONARY, PHOTO_PLACEHOLDERS } from '../data';
 import { motion, AnimatePresence, useMotionValue, useTransform } from 'motion/react';
 import { 
@@ -228,18 +229,60 @@ export default function Swiper({
     setActivePhotoIndex(prev => (prev - 1 + len) % len);
   };
 
-  const handleCreateReview = (carId: string, comment: string, rating: number) => {
-    const freshReview: Review = {
-      id: `rev_${Date.now()}`,
-      carId,
-      userName: currentUser.name || 'Anonymous User',
-      userAvatar: currentUser.avatar || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?q=80&w=120',
-      rating,
-      comment,
-      date: new Date().toISOString().split('T')[0]
-    };
-    if (activeCar && !activeCar.isAd) {
-      activeCar.reviews.unshift(freshReview);
+  const handleCreateReview = async (carId: string, comment: string, rating: number) => {
+    try {
+      let token = "";
+      if (auth.currentUser) {
+        token = await auth.currentUser.getIdToken();
+      }
+
+      const response = await fetch(`/api/vehicles/${carId}/reviews`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+        },
+        body: JSON.stringify({ rating, body: comment })
+      });
+
+      if (response.ok) {
+        const freshReview = await response.json();
+        if (activeCar && !activeCar.isAd) {
+          if (!activeCar.reviews) activeCar.reviews = [];
+          activeCar.reviews.unshift(freshReview);
+        }
+      } else {
+        // Fallback local option
+        const freshReview: Review = {
+          id: `rev_${Date.now()}`,
+          carId,
+          userName: currentUser.name || 'Anonymous User',
+          userAvatar: currentUser.avatar || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?q=80&w=120',
+          rating,
+          comment,
+          date: new Date().toISOString().split('T')[0]
+        };
+        if (activeCar && !activeCar.isAd) {
+          if (!activeCar.reviews) activeCar.reviews = [];
+          activeCar.reviews.unshift(freshReview);
+        }
+      }
+    } catch (err) {
+      console.error("Failed to post review to server:", err);
+      // Fallback local option
+      const freshReview: Review = {
+        id: `rev_${Date.now()}`,
+        carId,
+        userName: currentUser.name || 'Anonymous User',
+        userAvatar: currentUser.avatar || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?q=80&w=120',
+        rating,
+        comment,
+        date: new Date().toISOString().split('T')[0]
+      };
+      if (activeCar && !activeCar.isAd) {
+        if (!activeCar.reviews) activeCar.reviews = [];
+        activeCar.reviews.unshift(freshReview);
+      }
     }
   };
 

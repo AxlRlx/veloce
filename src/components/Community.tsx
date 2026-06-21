@@ -21,6 +21,7 @@ import {
   Globe 
 } from 'lucide-react';
 import { CommunityEvent, CreatorPost, AppLanguage, User } from '../types';
+import { auth } from '../lib/firebase';
 
 interface CommunityProps {
   currentUser: User | null;
@@ -173,11 +174,35 @@ const INITIAL_CREATORS: ContentCreator[] = [
 ];
 
 export default function Community({ currentUser, language, theme, onUserUpdate }: CommunityProps) {
-  // Events and Creators list loaded from localstorage
-  const [events, setEvents] = useState<CommunityEvent[]>(() => {
-    const cached = localStorage.getItem('veloce_community_events');
-    return cached ? JSON.parse(cached) : INITIAL_EVENTS;
-  });
+  // Events list loaded from server, and Creators from localstorage
+  const [events, setEvents] = useState<CommunityEvent[]>([]);
+  const [loadingEvents, setLoadingEvents] = useState(true);
+
+  const loadEvents = async () => {
+    try {
+      let token = "";
+      if (auth.currentUser) {
+        token = await auth.currentUser.getIdToken();
+      }
+      const res = await fetch('/api/community/events', {
+        headers: {
+          ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+        }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setEvents(data);
+      }
+    } catch (e) {
+      console.error("Failed to fetch community events:", e);
+    } finally {
+      setLoadingEvents(false);
+    }
+  };
+
+  useEffect(() => {
+    loadEvents();
+  }, [currentUser]);
 
   const [creators, setCreators] = useState<ContentCreator[]>(() => {
     const cached = localStorage.getItem('veloce_community_creators');
@@ -215,15 +240,11 @@ export default function Community({ currentUser, language, theme, onUserUpdate }
 
   // Sync state
   useEffect(() => {
-    localStorage.setItem('veloce_community_events', JSON.stringify(events));
-  }, [events]);
-
-  useEffect(() => {
     localStorage.setItem('veloce_community_creators', JSON.stringify(creators));
   }, [creators]);
 
   // Join/RSVP event handler
-  const handleToggleEventRSVP = (evtId: string) => {
+  const handleToggleEventRSVP = async (evtId: string) => {
     const targeted = events.find(e => e.id === evtId);
     if (!targeted) return;
 
@@ -234,25 +255,41 @@ export default function Community({ currentUser, language, theme, onUserUpdate }
       return;
     }
 
-    setEvents(prev => prev.map(evt => {
-      if (evt.id === evtId) {
-        const isJoined = !evt.joined;
-        return {
-          ...evt,
-          joined: isJoined,
-          participantsCount: isJoined ? evt.participantsCount + 1 : evt.participantsCount - 1
-        };
+    try {
+      let token = "";
+      if (auth.currentUser) {
+        token = await auth.currentUser.getIdToken();
       }
-      return evt;
-    }));
+      const response = await fetch(`/api/community/events/${evtId}/rsvp`, {
+        method: 'POST',
+        headers: {
+          ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+        }
+      });
 
-    const isCurrentlyJoined = targeted.joined;
-    const textNotice = !isCurrentlyJoined 
-      ? `Success! RSVP approved. You have registered for: ${targeted.title}. See you near the starting grid!` 
-      : `Removed registration for: ${targeted.title}.`;
-    
-    setBannerAlert(textNotice);
-    setTimeout(() => setBannerAlert(null), 4500);
+      if (response.ok) {
+        const resData = await response.json();
+        setEvents(prev => prev.map(evt => {
+          if (evt.id === evtId) {
+            return {
+              ...evt,
+              joined: resData.joined,
+              participantsCount: resData.participantsCount
+            };
+          }
+          return evt;
+        }));
+
+        const textNotice = resData.joined 
+          ? `Success! RSVP approved. You have registered for: ${targeted.title}. See you near the starting grid!` 
+          : `Removed registration for: ${targeted.title}.`;
+        
+        setBannerAlert(textNotice);
+        setTimeout(() => setBannerAlert(null), 4500);
+      }
+    } catch (err) {
+      console.error("Failed to toggle RSVP on server:", err);
+    }
   };
 
   // Creator Video Like handler
@@ -274,49 +311,59 @@ export default function Community({ currentUser, language, theme, onUserUpdate }
   const [eventIsPremium, setEventIsPremium] = useState(false);
 
   // Create customized user event list
-  const handleCreateNewEvent = (e: React.FormEvent) => {
+  const handleCreateNewEvent = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!eventTitle || !eventDesc || !eventDate || !eventLocation) {
       alert("Please check all required inputs!");
       return;
     }
 
-    // Normal users can specify if Veloce GT premium tier restricted, but if they are premium it defaults to true or can be configured
-    const brandNewEvt: CommunityEvent = {
-      id: `evt_user_${Math.floor(Math.random() * 90000 + 10000)}`,
-      title: eventTitle,
-      description: eventDesc,
-      type: eventType,
-      date: eventDate,
-      location: eventLocation,
-      participantsCount: 1, // Author automatically registers
-      hostName: currentUser?.name || 'Local Enthusiast',
-      hostAvatar: currentUser?.avatar || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?q=80&w=120',
-      isHostGtrs: currentUser?.subscriptionTier === 'dealer_paid' || eventSponsorType === 'dealer',
-      joined: true, // Auto registered
-      isPremium: eventIsPremium,
-      onlyPremiumVisible: eventIsPremium, // To correspond with "only visible and available to veloce gt premium users"
-      feeType: eventFeeType,
-      feeAmount: eventFeeType === 'paid' ? parseFloat(eventFeeAmount) || 0 : 0,
-      sponsoredBy: eventSponsorType
-    };
+    try {
+      let token = "";
+      if (auth.currentUser) {
+        token = await auth.currentUser.getIdToken();
+      }
 
-    setEvents(prev => [brandNewEvt, ...prev]);
-    setShowEventModal(false);
+      const response = await fetch('/api/community/events', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+        },
+        body: JSON.stringify({
+          title: eventTitle,
+          description: eventDesc,
+          type: eventType,
+          date: eventDate,
+          location: eventLocation,
+          isPremium: eventIsPremium,
+          feeType: eventFeeType,
+          feeAmount: eventFeeType === 'paid' ? parseFloat(eventFeeAmount) || 0 : 0,
+          sponsoredBy: eventSponsorType
+        })
+      });
 
-    // Reset Form
-    setEventTitle('');
-    setEventDesc('');
-    setEventType('meetup');
-    setEventDate('');
-    setEventLocation('');
-    setEventIsPremium(false);
-    setEventFeeType('free');
-    setEventFeeAmount('25');
-    setEventSponsorType('private_sponsor');
+      if (response.ok) {
+        await loadEvents();
+        setShowEventModal(false);
 
-    setBannerAlert("Club Event successfully hosted and published in Veloce! Your peer network can now view and RSVP.");
-    setTimeout(() => setBannerAlert(null), 5000);
+        // Reset Form
+        setEventTitle('');
+        setEventDesc('');
+        setEventType('meetup');
+        setEventDate('');
+        setEventLocation('');
+        setEventIsPremium(false);
+        setEventFeeType('free');
+        setEventFeeAmount('25');
+        setEventSponsorType('private_sponsor');
+
+        setBannerAlert("Club Event successfully hosted and published in Veloce! Your peer network can now view and RSVP.");
+        setTimeout(() => setBannerAlert(null), 5000);
+      }
+    } catch (err) {
+      console.error("Failed to upload event to server:", err);
+    }
   };
 
   // Create custom Creator promotion profile
