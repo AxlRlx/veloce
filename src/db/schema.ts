@@ -42,6 +42,11 @@ export const vehicles = pgTable('vehicles', {
   isDemoListing: boolean('is_demo_listing').default(false).notNull(),
   isPublic: boolean('is_public').default(true).notNull(),
   reviewNotes: text('review_notes'),
+  vinLast6: text('vin_last_6'),
+  registrationDocumentUploaded: text('registration_document_uploaded'),
+  insuranceDocumentUploaded: text('insurance_document_uploaded'),
+  proofPhotoUploaded: text('proof_photo_uploaded'),
+  odometerPhotoUploaded: text('odometer_photo_uploaded'),
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 });
