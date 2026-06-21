@@ -54,6 +54,9 @@ export interface Car {
   engineShape?: string;
   rentAvailableStart?: string;
   rentAvailableEnd?: string;
+  vehicleType?: 'car' | 'motorcycle';
+  authenticityStatus?: 'unverified' | 'verified' | 'flagged';
+  imagePolicyStatus?: 'compliant' | 'non_compliant' | 'pending_review';
   status?: 'draft' | 'pending_review' | 'active' | 'rejected' | 'sold' | 'rented';
 }
 

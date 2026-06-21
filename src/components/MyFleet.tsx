@@ -57,6 +57,7 @@ export default function MyFleet({
   const [quickEngineSize, setQuickEngineSize] = useState('');
   const [quickEngineShape, setQuickEngineShape] = useState('');
   const [quickImages, setQuickImages] = useState<string[]>([]);
+  const [vehicleType, setVehicleType] = useState<'car' | 'motorcycle'>('car');
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
@@ -79,7 +80,7 @@ export default function MyFleet({
   };
 
   const prefillSampleImages = () => {
-    const stock = [
+    const stockCars = [
       'https://images.unsplash.com/photo-1503376780353-7e6692767b70?q=80&w=800',
       'https://images.unsplash.com/photo-1552519507-da3b142c6e3d?q=80&w=800',
       'https://images.unsplash.com/photo-1580273916550-e323be2ae537?q=80&w=800',
@@ -87,7 +88,14 @@ export default function MyFleet({
       'https://images.unsplash.com/photo-1542282088-fe8426682b8f?q=80&w=800',
       'https://images.unsplash.com/photo-1618843479313-40f8afb4b4d8?q=80&w=800'
     ];
-    setQuickImages(stock);
+    const stockMotorcycles = [
+      'https://images.unsplash.com/photo-1558981806-ec527fa84c39?q=80&w=800',
+      'https://images.unsplash.com/photo-1568772585407-9361f9bf3a87?q=80&w=800',
+      'https://images.unsplash.com/photo-1599819811279-d5ad9cccf838?q=80&w=800',
+      'https://images.unsplash.com/photo-1558981852-416358c65799?q=80&w=800',
+      'https://images.unsplash.com/photo-1558981359-219d6364c9c8?q=80&w=800'
+    ];
+    setQuickImages(vehicleType === 'motorcycle' ? stockMotorcycles : stockCars);
   };
 
   // Has analytics access? Dealers have it automatically, users must be veloce_gt
@@ -133,6 +141,7 @@ export default function MyFleet({
     setQuickMileage(car.mileage?.toString() || '12000');
     setQuickEngineSize(car.engine?.replace(/^\d+HP\s*/, '') || '4.0L');
     setQuickImages(car.images);
+    setVehicleType(car.vehicleType || (car.category as any) || 'car');
     setShowQuickAdd(true);
   };
 
@@ -140,8 +149,9 @@ export default function MyFleet({
     e.preventDefault();
     if (!quickBrand || !quickModel) return;
 
-    if (quickImages.length < 6) {
-      alert("Error: You must upload or select a minimum of 6 pictures to post a vehicle.");
+    const minRequired = vehicleType === 'motorcycle' ? 5 : 6;
+    if (quickImages.length < minRequired) {
+      alert(`Error: You must upload or select a minimum of ${minRequired} pictures to post a ${vehicleType}.`);
       return;
     }
 
@@ -156,7 +166,9 @@ export default function MyFleet({
         type: quickType,
         description: quickDesc,
         mileage: parseInt(quickMileage) || 12000,
-        engine: `${editingCar.power || 450}HP ${quickEngineSize || '4.0L'}`
+        engine: `${editingCar.power || 450}HP ${quickEngineSize || '4.0L'}`,
+        vehicleType: vehicleType,
+        category: vehicleType
       };
       onUpdateCar(updated);
       setEditingCar(null);
@@ -183,8 +195,8 @@ export default function MyFleet({
         location: 'Beverly Hills, CA',
         distance: 2.1,
         rating: 5.0,
-        description: quickDesc || 'High performance premium luxury automobile, perfect for open highway drives.',
-        features: ['Apple CarPlay Enabled', 'Premium Alcantara sport seating', 'Comprehensive telemetry dashboard'],
+        description: quickDesc || 'High performance premium luxury vehicle, engineered for precision and beauty.',
+        features: ['Apple CarPlay Enabled', 'Premium custom seating design', 'Comprehensive telemetry dashboard'],
         dealerId: currentUser.id,
         dealerName: currentUser.name,
         dealerAvatar: currentUser.avatar,
@@ -193,7 +205,9 @@ export default function MyFleet({
         mileage: parseInt(quickMileage) || 12000,
         engineSize: quickEngineSize || '4.0L',
         engineShape: '',
-        status: 'draft' // Flow starts in draft status per constraints
+        status: 'draft', // Flow starts in draft status per constraints
+        vehicleType: vehicleType,
+        category: vehicleType
       };
 
       onAddNewCar(newCar);
@@ -209,6 +223,7 @@ export default function MyFleet({
     setQuickEngineSize('');
     setQuickEngineShape('');
     setQuickImages([]);
+    setVehicleType('car');
   };
 
   // Simulated Analytics Datasets (Pure CSS SVG Line graphs for top performance feel)
@@ -380,7 +395,7 @@ export default function MyFleet({
                     />
                   </div>
 
-                  <div className="md:col-span-2 space-y-1">
+                  <div className="md:col-span-1 space-y-1">
                     <label className="block text-[8.5px] font-mono uppercase font-bold text-stone-405">Purpose</label>
                     <select
                       value={quickType}
@@ -390,6 +405,18 @@ export default function MyFleet({
                       <option value="rent">Rent / Lease</option>
                       <option value="buy">Sell / Outright</option>
                       <option value="both">Both Options</option>
+                    </select>
+                  </div>
+
+                  <div className="md:col-span-1 space-y-1">
+                    <label className="block text-[8.5px] font-mono uppercase font-bold text-stone-405">Vehicle Type</label>
+                    <select
+                      value={vehicleType}
+                      onChange={e => setVehicleType(e.target.value as any)}
+                      className="w-full text-xs p-2.5 bg-stone-950 border border-stone-800 rounded-lg text-stone-100 focus:outline-none focus:border-stone-700 font-mono"
+                    >
+                      <option value="car">Car / Supercar</option>
+                      <option value="motorcycle">Motorcycle</option>
                     </select>
                   </div>
 
@@ -432,8 +459,8 @@ export default function MyFleet({
                   <div className="md:col-span-6 space-y-3.5 border-t border-stone-805 pt-4">
                     <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                       <div>
-                        <span className="block text-[9.5px] font-mono uppercase font-extrabold text-stone-300">Vehicle Photos (Required: Min 6)</span>
-                        <span className="block text-[9px] text-stone-500 font-sans">Upload your custom hi-res images. Add minimum 6 photos.</span>
+                        <span className="block text-[9.5px] font-mono uppercase font-extrabold text-stone-300">Vehicle Photos (Required: Min {vehicleType === 'motorcycle' ? 5 : 6})</span>
+                        <span className="block text-[9px] text-stone-500 font-sans">Upload your custom hi-res images. Add minimum {vehicleType === 'motorcycle' ? 5 : 6} photos.</span>
                       </div>
                       <div className="flex items-center gap-2">
                         <button
@@ -441,7 +468,7 @@ export default function MyFleet({
                           onClick={prefillSampleImages}
                           className="py-1 px-2.5 bg-stone-850 hover:bg-stone-800 text-stone-305 rounded border border-stone-800 text-[8.5px] font-mono uppercase font-bold tracking-wider transition-colors"
                         >
-                          Prefill 6 Premium Stock Photos
+                          Prefill {vehicleType === 'motorcycle' ? 5 : 6} Premium Stock Photos
                         </button>
                         <label className="py-1 px-2.5 bg-amber-500 hover:bg-amber-450 text-stone-950 rounded text-[8.5px] font-mono uppercase font-extrabold tracking-wider cursor-pointer transition-colors flex items-center gap-1">
                           <Plus className="w-3 h-3" />
@@ -492,17 +519,17 @@ export default function MyFleet({
 
                     {/* Status check / alerts */}
                     <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between pt-1 gap-2">
-                      <span className={`text-[9px] font-mono uppercase font-bold ${quickImages.length < 6 ? 'text-rose-500' : 'text-emerald-500'}`}>
-                        {quickImages.length < 6 
-                          ? `⚠️ Status: Uploaded ${quickImages.length}/6 required photos` 
+                      <span className={`text-[9px] font-mono uppercase font-bold ${quickImages.length < (vehicleType === 'motorcycle' ? 5 : 6) ? 'text-rose-500' : 'text-emerald-500'}`}>
+                        {quickImages.length < (vehicleType === 'motorcycle' ? 5 : 6) 
+                          ? `⚠️ Status: Uploaded ${quickImages.length}/${vehicleType === 'motorcycle' ? 5 : 6} required photos` 
                           : `✅ Status: Ready to publish (${quickImages.length} photos uploaded)`
                         }
                       </span>
                       <button
                         type="submit"
-                        disabled={quickImages.length < 6}
+                        disabled={quickImages.length < (vehicleType === 'motorcycle' ? 5 : 6)}
                         className={`py-2 px-6 rounded-lg text-[10px] font-mono uppercase font-extrabold tracking-widest transition-all ${
-                          quickImages.length < 6 
+                          quickImages.length < (vehicleType === 'motorcycle' ? 5 : 6) 
                             ? 'bg-stone-800 text-stone-600 border border-stone-850 cursor-not-allowed'
                             : 'bg-amber-500 hover:bg-amber-450 text-stone-950 cursor-pointer shadow-lg shadow-amber-500/10'
                         }`}

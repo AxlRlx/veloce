@@ -211,76 +211,18 @@ export default function SubscriptionCheckout({ sessionId, language, onSuccess, o
                   />
                 </div>
 
-                {/* Card Number Input */}
-                <div className="space-y-1.5">
-                  <label className="block text-[11px] font-medium text-stone-600 font-sans flex items-center justify-between">
-                    <span>Card Information</span>
-                    <span className="flex items-center gap-1 text-[10px] text-stone-400 font-mono">
-                      <CreditCard className="w-3 h-3 text-stone-400" /> Secure Encryption
-                    </span>
-                  </label>
-                  <div className="relative">
-                    <input
-                      type="text"
-                      placeholder="4242 4242 4242 4242"
-                      value={cardNumber}
-                      maxLength={19}
-                      onChange={(e) => handleCardNumberChange(e.target.value)}
-                      required
-                      className="w-full text-xs py-2.5 pl-3.5 pr-10 bg-stone-50 border border-stone-200 rounded-t-lg text-stone-800 font-mono tracking-wider focus:outline-none focus:ring-1 focus:ring-stone-500 focus:border-stone-500 focus:bg-white transition-all shadow-sm"
-                    />
-                    <div className="absolute right-3.5 top-3 text-stone-400 flex gap-1">
-                      <Lock className="w-3.5 h-3.5 text-stone-400" />
-                    </div>
+                {/* Secure Veloce Sandbox Gateway Info */}
+                <div className="p-4 bg-stone-50 border border-stone-200 rounded-xl space-y-3">
+                  <div className="flex items-center gap-2 text-stone-700 font-mono text-[10px] uppercase tracking-wider font-bold">
+                    <Shield className="w-3.5 h-3.5 text-emerald-500" />
+                    <span>Stripe Checkout Simulation Active</span>
                   </div>
-                  
-                  {/* Grid fields for card */}
-                  <div className="grid grid-cols-3 gap-0 border-t-0 border-stone-200">
-                    <input
-                      type="text"
-                      placeholder="MM/YY"
-                      maxLength={5}
-                      value={expiry}
-                      onChange={(e) => handleExpiryChange(e.target.value)}
-                      required
-                      className="text-xs py-2.5 px-3.5 bg-stone-50 border border-t-0 border-stone-200 rounded-bl-lg text-stone-850 font-mono text-center focus:outline-none focus:ring-1 focus:ring-stone-499 focus:border-stone-499 focus:bg-white transition-all shadow-sm"
-                    />
-                    <input
-                      type="password"
-                      placeholder="CVC"
-                      maxLength={3}
-                      value={cvv}
-                      onChange={(e) => setCvv(e.target.value)}
-                      required
-                      className="text-xs py-2.5 px-3.5 bg-stone-50 border-t-0 border-l-0 border-r-0 border-stone-200 text-stone-850 font-mono text-center focus:outline-none focus:ring-1 focus:ring-stone-499 focus:border-stone-499 focus:bg-white transition-all shadow-sm"
-                    />
-                    <input
-                      type="text"
-                      placeholder="ZIP"
-                      maxLength={5}
-                      value={zipCode}
-                      onChange={(e) => setZipCode(e.target.value)}
-                      required
-                      className="text-xs py-2.5 px-3.5 bg-stone-50 border-t-0 border-l-0 border-stone-200 rounded-br-lg text-stone-850 font-mono text-center focus:outline-none focus:ring-1 focus:ring-stone-499 focus:border-stone-499 focus:bg-white transition-all shadow-sm"
-                    />
-                  </div>
-                  <span className="text-[10px] text-stone-400 block mt-1">Use dummy mock inputs (e.g., card "4242 4242 4242 ...").</span>
-                </div>
-
-                {/* Cardholder Name */}
-                <div className="space-y-1.5">
-                  <label className="block text-[11px] font-medium text-stone-600 font-sans">
-                    Cardholder Name
-                  </label>
-                  <input
-                    type="text"
-                    value={cardName}
-                    onChange={(e) => setCardName(e.target.value)}
-                    required
-                    maxLength={50}
-                    className="w-full text-xs py-2.5 px-3.5 bg-stone-50 border border-stone-200 rounded-lg text-stone-800 font-sans focus:outline-none focus:ring-1 focus:ring-stone-550 focus:border-stone-550 focus:bg-white transition-all shadow-sm"
-                    placeholder="Alex Morgan"
-                  />
+                  <p className="text-xs text-stone-600 leading-relaxed font-sans">
+                    You are subscribing to Veloce's premium <strong className="text-stone-900">{planName}</strong>. This application is configured to run in safe Sandbox Mode.
+                  </p>
+                  <p className="text-[11px] text-stone-500 leading-relaxed font-sans">
+                    To maintain strict privacy standards and prevent un-tokenized credit card transmitting, raw credit card collection forms are deprecated. Your mock subscription is safely mapped and persisted inside our secure PostgreSQL instance.
+                  </p>
                 </div>
 
                 {/* Country Grid picker */}

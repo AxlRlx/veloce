@@ -3,7 +3,21 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { createServer as createViteServer } from "vite";
 import { db } from "./src/db/index.ts";
-import { profiles, vehicles, bookings, conversations, messages, reviews, communityEvents, subscriptions, adminReports } from "./src/db/schema.ts";
+import { 
+  profiles, 
+  vehicles, 
+  bookings, 
+  conversations, 
+  messages, 
+  reviews, 
+  communityEvents, 
+  subscriptions, 
+  adminReports,
+  vehicleImages,
+  adminActionLogs,
+  demoPaymentEvents,
+  paymentProviderEvents
+} from "./src/db/schema.ts";
 import { eq, and, desc } from "drizzle-orm";
 import { adminAuth } from "./src/lib/firebase-admin.ts";
 import { GoogleGenAI } from "@google/genai";
@@ -338,6 +352,155 @@ async function startServer() {
     next();
   };
 
+  // Require Admin role
+  const requireAdmin = async (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    const user = (req as any).user;
+    if (!user) {
+      return res.status(401).json({ error: "Authentication required" });
+    }
+    try {
+      const profileRes = await db.select().from(profiles).where(eq(profiles.id, user.uid)).limit(1);
+      const profile = profileRes[0];
+      if (!profile || profile.role !== "admin") {
+        return res.status(403).json({ error: "Access denied. Admin role required." });
+      }
+      next();
+    } catch (err) {
+      console.error("requireAdmin middleware error:", err);
+      res.status(500).json({ error: "Internal server authentication validation failure" });
+    }
+  };
+
+  // Require Dealer or Admin role
+  const requireDealer = async (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    const user = (req as any).user;
+    if (!user) {
+      return res.status(401).json({ error: "Authentication required" });
+    }
+    try {
+      const profileRes = await db.select().from(profiles).where(eq(profiles.id, user.uid)).limit(1);
+      const profile = profileRes[0];
+      if (!profile || (profile.role !== "dealer" && profile.role !== "admin")) {
+        return res.status(403).json({ error: "Access denied. Dealer role required." });
+      }
+      next();
+    } catch (err) {
+      console.error("requireDealer middleware error:", err);
+      res.status(500).json({ error: "Internal server authentication validation failure" });
+    }
+  };
+
+  // Require Vehicle Owner or Admin
+  const requireVehicleOwner = async (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    const user = (req as any).user;
+    const vehicleId = req.params.id || req.body.carId || req.body.vehicleId;
+    if (!user) {
+      return res.status(401).json({ error: "Authentication required" });
+    }
+    if (!vehicleId) {
+      return res.status(400).json({ error: "Vehicle identifier is missing from request" });
+    }
+    try {
+      const profileRes = await db.select().from(profiles).where(eq(profiles.id, user.uid)).limit(1);
+      const profile = profileRes[0];
+      if (!profile) {
+        return res.status(403).json({ error: "Authorizing profile not found" });
+      }
+      const vehicleRes = await db.select().from(vehicles).where(eq(vehicles.id, vehicleId)).limit(1);
+      const vehicle = vehicleRes[0];
+      if (!vehicle) {
+        return res.status(404).json({ error: "Target vehicle listing not found" });
+      }
+      if (vehicle.ownerId !== user.uid && profile.role !== "admin") {
+        return res.status(403).json({ error: "Ownership conflict. Action forbidden." });
+      }
+      next();
+    } catch (err) {
+      console.error("requireVehicleOwner middleware error:", err);
+      res.status(500).json({ error: "Internal server ownership validation failure" });
+    }
+  };
+
+  // Require Booking Participant or Admin
+  const requireBookingParticipant = async (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    const user = (req as any).user;
+    const bookingId = req.params.id || req.body.bookingId;
+    if (!user) {
+      return res.status(401).json({ error: "Authentication required" });
+    }
+    if (!bookingId) {
+      return res.status(400).json({ error: "Booking identifier is missing from request" });
+    }
+    try {
+      const profileRes = await db.select().from(profiles).where(eq(profiles.id, user.uid)).limit(1);
+      const profile = profileRes[0];
+      if (!profile) {
+        return res.status(403).json({ error: "Authorizing profile not found" });
+      }
+      const bookingRes = await db.select().from(bookings).where(eq(bookings.id, bookingId)).limit(1);
+      const booking = bookingRes[0];
+      if (!booking) {
+        return res.status(404).json({ error: "Target reservation not found" });
+      }
+      if (booking.renterId !== user.uid && booking.ownerId !== user.uid && profile.role !== "admin") {
+        return res.status(403).json({ error: "Unauthorized access: You are not a participant in this booking." });
+      }
+      next();
+    } catch (err) {
+      console.error("requireBookingParticipant middleware error:", err);
+      res.status(500).json({ error: "Internal server booking participant validation failure" });
+    }
+  };
+
+  // Require Conversation Participant or Admin
+  const requireConversationParticipant = async (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    const user = (req as any).user;
+    const conversationId = req.params.id || req.body.conversationId;
+    if (!user) {
+      return res.status(401).json({ error: "Authentication required" });
+    }
+    if (!conversationId) {
+      return res.status(400).json({ error: "Conversation identifier is missing" });
+    }
+    try {
+      const profileRes = await db.select().from(profiles).where(eq(profiles.id, user.uid)).limit(1);
+      const profile = profileRes[0];
+      if (!profile) {
+        return res.status(403).json({ error: "User profile not found" });
+      }
+      const convRes = await db.select().from(conversations).where(eq(conversations.id, conversationId)).limit(1);
+      const conv = convRes[0];
+      if (!conv) {
+        return res.status(404).json({ error: "Conversation not found" });
+      }
+      if (conv.userOne !== user.uid && conv.userTwo !== user.uid && profile.role !== "admin") {
+        return res.status(403).json({ error: "Access Denied: Not a member of this chat room" });
+      }
+      next();
+    } catch (err) {
+      console.error("requireConversationParticipant middleware error:", err);
+      res.status(500).json({ error: "Internal server participant validation failure" });
+    }
+  };
+
+  // Helper helper to write action logs
+  const logAdminAction = async (adminId: string, action: string, targetType: string, targetId: string, metadata?: any) => {
+    try {
+      const generatedId = `AL-${Math.floor(Math.random() * 900000 + 100000)}`;
+      await db.insert(adminActionLogs).values({
+        id: generatedId,
+        adminId,
+        action,
+        targetType,
+        targetId,
+        metadata: metadata ? JSON.stringify(metadata) : null,
+        createdAt: new Date()
+      });
+    } catch (err) {
+      console.error("Failed to persist admin audit log:", err);
+    }
+  };
+
   // Auth sync profile
   app.post("/api/auth/sync", verifyFirebaseUser, async (req, res) => {
     const user = (req as any).user;
@@ -464,7 +627,17 @@ async function startServer() {
       };
       if (name !== undefined) updates.fullName = name;
       if (avatar !== undefined) updates.avatarUrl = avatar;
-      if (kycStatus !== undefined) updates.kycStatus = kycStatus;
+      
+      if (kycStatus !== undefined) {
+        if (kycStatus !== existingProfile[0].kycStatus) {
+          // Normal users can only trigger a transition to 'pending' to submit documents
+          if (kycStatus === "pending" && (existingProfile[0].kycStatus === "unverified" || existingProfile[0].kycStatus === "rejected")) {
+            updates.kycStatus = "pending";
+          } else {
+            return res.status(403).json({ error: "KYC verification can only be approved by an administrator." });
+          }
+        }
+      }
 
       const updated = await db
         .update(profiles)
@@ -579,7 +752,7 @@ async function startServer() {
     }
   });
 
-  // 2. POST /api/vehicles (Create list item)
+  // 2. POST /api/vehicles (Create list item with policy enforcement)
   app.post("/api/vehicles", verifyFirebaseUser, async (req, res) => {
     const user = (req as any).user;
     const body = req.body;
@@ -587,6 +760,30 @@ async function startServer() {
     if (!body.make || !body.model || !body.year) {
       return res.status(400).json({ error: "Incomplete listing details (Make, Model, and Year are required)." });
     }
+
+    const vehicleType = body.vehicleType === "motorcycle" ? "motorcycle" : "car";
+    const minPhotos = vehicleType === "motorcycle" ? 5 : 6;
+    const imagesArray = Array.isArray(body.images) ? body.images : [];
+
+    if (imagesArray.length < minPhotos) {
+      return res.status(400).json({
+        error: `Minimum photo policy violation. ${
+          vehicleType === "motorcycle" ? "Motorcycles" : "Cars"
+        } require at least ${minPhotos} real photos. You have uploaded ${imagesArray.length}.`
+      });
+    }
+
+    // Inspect if any images contain stock photo markers
+    let hasStockImages = false;
+    for (const url of imagesArray) {
+      if (url.includes("images.unsplash.com") || url.includes("stock") || url.includes("placeholder")) {
+        hasStockImages = true;
+        break;
+      }
+    }
+
+    const authenticityStatus = hasStockImages ? "unverified" : "verified";
+    const imagePolicyStatus = hasStockImages ? "pending_review" : "compliant";
 
     try {
       const generatedId = "car_" + Math.random().toString(36).substring(2, 11);
@@ -607,10 +804,17 @@ async function startServer() {
         fuelType: body.displacement || 'Petrol',
         horsepower: parseInt(body.power) || 450,
         category: body.category || 'car',
-        status: body.status || 'draft', // Flow: draft -> pending_review -> active
-        images: body.images && body.images.length > 0 ? body.images : [
+        status: hasStockImages ? 'pending_review' : (body.status || 'active'), // Stock photos require prior review
+        images: imagesArray.length > 0 ? imagesArray : [
           'https://images.unsplash.com/photo-1503376780353-7e6692767b70?q=80&w=1000'
-        ]
+        ],
+        vehicleType,
+        listingSource: "user",
+        authenticityStatus,
+        imagePolicyStatus,
+        isDemoListing: false,
+        isPublic: true,
+        reviewNotes: hasStockImages ? "Stock photos detected. Awaiting admin approval." : "Automated photo policy pass."
       };
 
       const result = await db.insert(vehicles).values({
@@ -618,6 +822,27 @@ async function startServer() {
         createdAt: new Date(),
         updatedAt: new Date()
       }).returning();
+
+      // Persist individual photos in modern vehicleImages table
+      for (const imgUrl of imagesArray) {
+        const imageId = "img_" + Math.random().toString(36).substring(2, 11);
+        const isStock = imgUrl.includes("images.unsplash.com") || imgUrl.includes("stock");
+        
+        await db.insert(vehicleImages).values({
+          id: imageId,
+          vehicleId: generatedId,
+          ownerId: user.uid,
+          storagePath: imgUrl,
+          publicUrl: imgUrl,
+          source: isStock ? "demo_placeholder" : "user_upload",
+          status: isStock ? "pending_review" : "approved",
+          fileSize: 1024 * 120, // simulated
+          mimeType: "image/jpeg",
+          width: 1280,
+          height: 720,
+          createdAt: new Date()
+        });
+      }
 
       // Retrieve owner profile for output
       const owner = await db.select().from(profiles).where(eq(profiles.id, user.uid)).limit(1);
@@ -658,7 +883,7 @@ async function startServer() {
     }
   });
 
-  // 3. PUT /api/vehicles/:id (Edit listing and enforce owner-only bounds)
+  // 3. PUT /api/vehicles/:id (Edit listing and enforce owner-only bounds with policy checks)
   app.put("/api/vehicles/:id", verifyFirebaseUser, async (req, res) => {
     const user = (req as any).user;
     const { id } = req.params;
@@ -673,6 +898,34 @@ async function startServer() {
       if (match[0].ownerId !== user.uid) {
         return res.status(403).json({ error: "Unauthorized access: You are not the registrar for this vehicle." });
       }
+
+      const vehicleType = body.vehicleType || match[0].vehicleType || "car";
+      const minPhotos = vehicleType === "motorcycle" ? 5 : 6;
+      const imagesArray = Array.isArray(body.images) ? body.images : match[0].images;
+
+      if (imagesArray.length < minPhotos) {
+        return res.status(400).json({
+          error: `Minimum photo policy violation. ${
+            vehicleType === "motorcycle" ? "Motorcycles" : "Cars"
+          } require at least ${minPhotos} authentic photos. Provided only ${imagesArray.length}.`
+        });
+      }
+
+      // Scan for stock photos if images are supplied in body
+      let hasStockImages = false;
+      if (body.images) {
+        for (const url of imagesArray) {
+          if (url.includes("images.unsplash.com") || url.includes("stock") || url.includes("placeholder")) {
+            hasStockImages = true;
+            break;
+          }
+        }
+      } else {
+        hasStockImages = match[0].imagePolicyStatus === "pending_review";
+      }
+
+      const authenticityStatus = hasStockImages ? "unverified" : "verified";
+      const imagePolicyStatus = hasStockImages ? "pending_review" : "compliant";
 
       const isRent = body.type === 'rent';
       const isBuy = body.type === 'buy';
@@ -693,12 +946,42 @@ async function startServer() {
           fuelType: body.displacement || match[0].fuelType,
           horsepower: body.power ? parseInt(body.power) : match[0].horsepower,
           category: body.category || match[0].category,
-          status: body.status || match[0].status,
-          images: body.images && body.images.length > 0 ? body.images : match[0].images,
+          status: hasStockImages ? 'pending_review' : (body.status || match[0].status),
+          images: imagesArray,
+          vehicleType,
+          authenticityStatus,
+          imagePolicyStatus,
           updatedAt: new Date()
         })
         .where(eq(vehicles.id, id))
         .returning();
+
+      // If the user modified the photo array, refresh the vehicleImages lookup
+      if (body.images) {
+        // Delete previous associations
+        const { vehicleImages: vi } = await import("./src/db/schema.ts");
+        await db.delete(vi).where(eq(vi.vehicleId, id));
+
+        for (const imgUrl of imagesArray) {
+          const imageId = "img_" + Math.random().toString(36).substring(2, 11);
+          const isStock = imgUrl.includes("images.unsplash.com") || imgUrl.includes("stock");
+          
+          await db.insert(vi).values({
+            id: imageId,
+            vehicleId: id,
+            ownerId: user.uid,
+            storagePath: imgUrl,
+            publicUrl: imgUrl,
+            source: isStock ? "demo_placeholder" : "user_upload",
+            status: isStock ? "pending_review" : "approved",
+            fileSize: 1024 * 120, // simulated
+            mimeType: "image/jpeg",
+            width: 1280,
+            height: 720,
+            createdAt: new Date()
+          });
+        }
+      }
 
       const owner = await db.select().from(profiles).where(eq(profiles.id, user.uid)).limit(1);
       const type = (updated[0].rentalPriceDaily > 0 && updated[0].price > 0) ? 'both' : (updated[0].rentalPriceDaily > 0 ? 'rent' : 'buy');
@@ -1891,16 +2174,26 @@ Guidelines:
     }
   });
 
-  // 6. PUT /api/auth/profile/role - Toggle current user's role on server (Simulation helper)
+  // 6. PUT /api/auth/profile/role - Toggle current user's role on server (Simulation helper with secure logging)
   app.put("/api/auth/profile/role", verifyFirebaseUser, async (req, res) => {
     const user = (req as any).user;
     const { role } = req.body;
+
+    const hasSandboxHeader = req.headers["x-veloce-sandbox-action"] === "true";
+    const isSandboxAllowed = process.env.NODE_ENV !== "production" || process.env.SANDBOX_MODE === "true" || hasSandboxHeader;
+
+    if (!isSandboxAllowed) {
+      return res.status(403).json({ error: "Access denied. Role mutations are forbidden in production mode." });
+    }
 
     if (!role || (role !== "user" && role !== "dealer" && role !== "admin")) {
       return res.status(400).json({ error: "Invalid role value." });
     }
 
     try {
+      const existingProfileRes = await db.select().from(profiles).where(eq(profiles.id, user.uid)).limit(1);
+      const previousRole = existingProfileRes[0]?.role || "user";
+
       const updated = await db
         .update(profiles)
         .set({ role, updatedAt: new Date() })
@@ -1910,6 +2203,15 @@ Guidelines:
       if (updated.length === 0) {
         return res.status(404).json({ error: "Profile was not found." });
       }
+
+      // Log the sandbox role mutation/escalation
+      await logAdminAction(
+        user.uid,
+        `ROLE_MUTATION_SANDBOX`,
+        "profile",
+        user.uid,
+        { previousRole, requestedRole: role, hasSandboxHeader, nodeEnv: process.env.NODE_ENV }
+      );
 
       res.json({ success: true, profile: updated[0] });
     } catch (err) {

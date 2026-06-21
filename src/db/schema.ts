@@ -1,5 +1,5 @@
 import { relations } from 'drizzle-orm';
-import { integer, pgTable, text, timestamp } from 'drizzle-orm/pg-core';
+import { integer, pgTable, text, timestamp, boolean } from 'drizzle-orm/pg-core';
 
 // 1. Profiles Table
 export const profiles = pgTable('profiles', {
@@ -35,6 +35,13 @@ export const vehicles = pgTable('vehicles', {
   category: text('category').notNull(),
   status: text('status').default('draft').notNull(), // 'draft', 'pending_review', 'active', 'rejected', 'sold', 'rented'
   images: text('images').array().notNull(), // array of strings
+  vehicleType: text('vehicle_type').default('car').notNull(), // 'car', 'motorcycle'
+  listingSource: text('listing_source').default('user_submitted').notNull(), // 'user_submitted', 'dealer_submitted', 'admin_seed', 'demo'
+  authenticityStatus: text('authenticity_status').default('unverified').notNull(), // 'unverified', 'pending_review', 'verified', 'rejected'
+  imagePolicyStatus: text('image_policy_status').default('missing_required_images').notNull(), // 'missing_required_images', 'pending_review', 'approved', 'rejected'
+  isDemoListing: boolean('is_demo_listing').default(false).notNull(),
+  isPublic: boolean('is_public').default(true).notNull(),
+  reviewNotes: text('review_notes'),
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 });
@@ -156,6 +163,68 @@ export const adminReports = pgTable('admin_reports', {
   targetId: text('target_id').notNull(),
   reason: text('reason').notNull(),
   status: text('status').default('pending').notNull(), // 'pending', 'resolved'
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+});
+
+// 11. Vehicle Images Table
+export const vehicleImages = pgTable('vehicle_images', {
+  id: text('id').primaryKey(),
+  vehicleId: text('vehicle_id')
+    .references(() => vehicles.id, { onDelete: 'cascade' })
+    .notNull(),
+  ownerId: text('owner_id')
+    .references(() => profiles.id, { onDelete: 'cascade' })
+    .notNull(),
+  storagePath: text('storage_path').notNull(),
+  publicUrl: text('public_url'),
+  source: text('source').default('user_upload').notNull(), // 'user_upload', 'admin_seed', 'demo_placeholder'
+  status: text('status').default('pending_review').notNull(), // 'pending_review', 'approved', 'rejected'
+  moderationReason: text('moderation_reason'),
+  fileSize: integer('file_size').notNull(),
+  mimeType: text('mime_type').notNull(),
+  width: integer('width'),
+  height: integer('height'),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+});
+
+// 12. Admin Action Logs Table
+export const adminActionLogs = pgTable('admin_action_logs', {
+  id: text('id').primaryKey(),
+  adminId: text('admin_id')
+    .references(() => profiles.id, { onDelete: 'cascade' })
+    .notNull(),
+  action: text('action').notNull(),
+  targetType: text('target_type').notNull(),
+  targetId: text('target_id').notNull(),
+  metadata: text('metadata'),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+});
+
+// 13. Demo Payment Events Table
+export const demoPaymentEvents = pgTable('demo_payment_events', {
+  id: text('id').primaryKey(),
+  userId: text('user_id')
+    .references(() => profiles.id, { onDelete: 'cascade' })
+    .notNull(),
+  bookingId: text('booking_id')
+    .references(() => bookings.id, { onDelete: 'cascade' }),
+  subscriptionId: text('subscription_id')
+    .references(() => subscriptions.id, { onDelete: 'cascade' }),
+  eventType: text('event_type').notNull(),
+  demoStatus: text('demo_status').notNull(),
+  metadata: text('metadata'),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+});
+
+// 14. Payment Provider Events Table
+export const paymentProviderEvents = pgTable('payment_provider_events', {
+  id: text('id').primaryKey(),
+  provider: text('provider').notNull(),
+  eventType: text('event_type').notNull(),
+  externalEventId: text('external_event_id'),
+  rawPayload: text('raw_payload'),
+  processedAt: timestamp('processed_at'),
   createdAt: timestamp('created_at').defaultNow().notNull(),
 });
 

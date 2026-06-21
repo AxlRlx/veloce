@@ -275,73 +275,20 @@ export default function PaymentModal({ car, currentUser, language, onClose, onSu
                 </div>
               </div>
 
-              {/* Secure Credit Card block */}
-              <div id="encrypted_inputs" className="space-y-3.5 pt-1">
-                <div>
-                  <label className="block text-[9px] uppercase tracking-widest text-stone-500 mb-1 font-mono">
-                    Owner Name Signature
-                  </label>
-                  <input
-                    id="card_name"
-                    type="text"
-                    value={cardName}
-                    onChange={(e) => setCardName(e.target.value)}
-                    className="w-full text-xs py-2 px-3.5 bg-stone-950/50 rounded-xl border border-stone-800 text-stone-300 focus:outline-none focus:border-stone-700"
-                    required
-                  />
+              {/* Honest Veloce Sandbox Gateway Block */}
+              <div id="sandbox_payment_notice" className="p-4 bg-stone-950/60 border border-stone-800 rounded-2xl space-y-3">
+                <div className="flex items-center gap-2 text-amber-500 font-mono text-[9px] uppercase tracking-wider font-bold">
+                  <Shield className="w-3.5 h-3.5" />
+                  <span>Veloce Sandbox Gateway Active</span>
                 </div>
-
-                <div>
-                  <label className="block text-[9px] uppercase tracking-widest text-stone-500 mb-1 font-mono">
-                    Encrypted Card Serial
-                  </label>
-                  <div className="relative">
-                    <input
-                      id="card_number"
-                      type="text"
-                      placeholder="4000 1234 5678 9010"
-                      value={cardNumber}
-                      maxLength={19}
-                      onChange={(e) => handleCardNumberChange(e.target.value)}
-                      className="w-full text-xs py-2 pl-3.5 pr-10 bg-stone-950/50 rounded-xl border border-stone-800 text-stone-300 focus:outline-none focus:border-stone-700 font-mono tracking-wider"
-                      required
-                    />
-                    <Lock className="absolute right-3.5 top-2.5 w-3.5 h-3.5 text-stone-600" />
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-[9px] uppercase tracking-widest text-stone-500 mb-1 font-mono">
-                      Expiry date
-                    </label>
-                    <input
-                      id="card_expiry"
-                      type="text"
-                      placeholder="MM/YY"
-                      maxLength={5}
-                      value={expiry}
-                      onChange={(e) => setExpiry(e.target.value)}
-                      className="w-full text-xs py-2 px-3.5 bg-stone-950/50 rounded-xl border border-stone-800 text-stone-300 focus:outline-none focus:border-stone-700 font-mono text-center"
-                      required
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-[9px] uppercase tracking-widest text-stone-500 mb-1 font-mono">
-                      Secure CVV
-                    </label>
-                    <input
-                      id="card_cvv"
-                      type="password"
-                      placeholder="•••"
-                      maxLength={3}
-                      value={cvv}
-                      onChange={(e) => setCvv(e.target.value)}
-                      className="w-full text-xs py-2 px-3.5 bg-stone-950/50 rounded-xl border border-stone-800 text-stone-300 focus:outline-none focus:border-stone-700 font-mono text-center"
-                      required
-                    />
-                  </div>
+                <p className="text-[10px] text-stone-300 leading-relaxed font-sans">
+                  Veloce is engineered to support professional Stripe Billing and Checkout pipelines. Today, this app operates in a secure <strong>Sandbox & local Demo mode</strong>.
+                </p>
+                <div className="flex items-start gap-1.5 text-stone-450 border-t border-stone-900/50 pt-2 text-[9px] leading-relaxed">
+                  <Lock className="w-3 h-3 text-emerald-500 mt-0.5 shrink-0" />
+                  <span>
+                    To ensure strict user privacy and PCI compliance, credit card collection fields are disabled. Clicking confirm will safely register your reservation in our live PostgreSQL instance without committing financial data.
+                  </span>
                 </div>
               </div>
 
