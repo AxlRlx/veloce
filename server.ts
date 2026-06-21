@@ -1768,6 +1768,166 @@ async function startServer() {
   });
 
 
+  // ==========================================
+  // PHASE 10 — ADMIN DASHBOARD BACKEND SERVICE
+  // ==========================================
+
+  // 1. GET /api/admin/users - Fetch all registered profiles (Admins only)
+  app.get("/api/admin/users", verifyFirebaseUser, async (req, res) => {
+    const user = (req as any).user;
+
+    try {
+      const profileRes = await db.select().from(profiles).where(eq(profiles.id, user.uid)).limit(1);
+      const profile = profileRes[0];
+      if (!profile || profile.role !== "admin") {
+        return res.status(403).json({ error: "Access denied. Admin role required." });
+      }
+
+      const allUsers = await db.select().from(profiles).orderBy(desc(profiles.createdAt));
+      res.json(allUsers);
+    } catch (err) {
+      console.error("Failed to load admin users:", err);
+      res.status(500).json({ error: "Could not retrieve user directory." });
+    }
+  });
+
+  // 2. GET /api/admin/bookings - Fetch all reservations (Admins only)
+  app.get("/api/admin/bookings", verifyFirebaseUser, async (req, res) => {
+    const user = (req as any).user;
+
+    try {
+      const profileRes = await db.select().from(profiles).where(eq(profiles.id, user.uid)).limit(1);
+      const profile = profileRes[0];
+      if (!profile || profile.role !== "admin") {
+        return res.status(403).json({ error: "Access denied. Admin role required." });
+      }
+
+      const allBookings = await db.select().from(bookings).orderBy(desc(bookings.createdAt));
+
+      // Fetch renter profile and vehicle details manually to avoid complex joins failing if client-side mock schemas have mismatching fields
+      const enrichedBookings = [];
+      for (const b of allBookings) {
+        const rProfile = await db.select().from(profiles).where(eq(profiles.id, b.renterId)).limit(1);
+        const car = await db.select().from(vehicles).where(eq(vehicles.id, b.vehicleId)).limit(1);
+        enrichedBookings.push({
+          ...b,
+          renterName: rProfile[0]?.fullName || "Veloce Guest",
+          renterEmail: rProfile[0]?.email || "no-email",
+          vehicleTitle: car[0] ? `${car[0].year} ${car[0].make} ${car[0].model}` : "Unknown Luxury Vehicle",
+          vehicleImage: car[0]?.images?.[0] || ""
+        });
+      }
+
+      res.json(enrichedBookings);
+    } catch (err) {
+      console.error("Failed to fetch admin bookings:", err);
+      res.status(500).json({ error: "Could not retrieve reservation logs." });
+    }
+  });
+
+  // 3. GET /api/admin/vehicles - Fetch all vehicle listings (Admins only)
+  app.get("/api/admin/vehicles", verifyFirebaseUser, async (req, res) => {
+    const user = (req as any).user;
+
+    try {
+      const profileRes = await db.select().from(profiles).where(eq(profiles.id, user.uid)).limit(1);
+      const profile = profileRes[0];
+      if (!profile || profile.role !== "admin") {
+        return res.status(403).json({ error: "Access denied. Admin role required." });
+      }
+
+      const allVehicles = await db.select().from(vehicles).orderBy(desc(vehicles.createdAt));
+      res.json(allVehicles);
+    } catch (err) {
+      console.error("Failed to retrieve admin vehicle list:", err);
+      res.status(500).json({ error: "Could not retrieve fleet catalog." });
+    }
+  });
+
+  // 4. PUT /api/admin/vehicles/:id/status - Approve, reject or modify vehicle listing state (Admins only)
+  app.put("/api/admin/vehicles/:id/status", verifyFirebaseUser, async (req, res) => {
+    const user = (req as any).user;
+    const { id } = req.params;
+    const { status } = req.body;
+
+    if (!status || (status !== "active" && status !== "pending_review" && status !== "rejected" && status !== "draft")) {
+      return res.status(400).json({ error: "Invalid listing status transition requested." });
+    }
+
+    try {
+      const profileRes = await db.select().from(profiles).where(eq(profiles.id, user.uid)).limit(1);
+      const profile = profileRes[0];
+      if (!profile || profile.role !== "admin") {
+        return res.status(403).json({ error: "Access denied. Admin role required." });
+      }
+
+      const updated = await db
+        .update(vehicles)
+        .set({ status, updatedAt: new Date() })
+        .where(eq(vehicles.id, id))
+        .returning();
+
+      if (updated.length === 0) {
+        return res.status(404).json({ error: "Vehicle listing not found." });
+      }
+
+      res.json({ success: true, vehicle: updated[0] });
+    } catch (err) {
+      console.error("Failed to alter vehicle status as admin:", err);
+      res.status(500).json({ error: "Could not update vehicle registry state." });
+    }
+  });
+
+  // 5. GET /api/admin/metrics - High level marketplace transaction analytics (Admins only)
+  app.get("/api/admin/metrics", verifyFirebaseUser, async (req, res) => {
+    const user = (req as any).user;
+
+    try {
+      const profileRes = await db.select().from(profiles).where(eq(profiles.id, user.uid)).limit(1);
+      const profile = profileRes[0];
+      if (!profile || profile.role !== "admin") {
+        return res.status(403).json({ error: "Access denied. Admin role required." });
+      }
+
+      const usersList = await db.select().from(profiles);
+      const vehiclesList = await db.select().from(vehicles);
+      const bookingsList = await db.select().from(bookings);
+      const reportsList = await db.select().from(adminReports);
+
+      const totalUsers = usersList.length;
+      const totalDealers = usersList.filter(u => u.role === "dealer").length;
+      const totalAdmins = usersList.filter(u => u.role === "admin").length;
+
+      const activeListings = vehiclesList.filter(v => v.status === "active").length;
+      const pendingReviewListings = vehiclesList.filter(v => v.status === "pending_review").length;
+
+      const pendingBookingsCount = bookingsList.filter(b => b.status === "pending").length;
+      const activeBookingsCount = bookingsList.filter(b => b.status === "confirmed").length;
+      
+      const totalPriceVal = bookingsList
+        .filter(b => b.status === "completed" || b.status === "confirmed")
+        .reduce((sum, b) => sum + Number(b.totalPrice || 0), 0);
+
+      const pendingReportsCount = reportsList.filter(r => r.status === "pending").length;
+
+      res.json({
+        totalUsers,
+        totalDealers,
+        totalAdmins,
+        activeListings,
+        pendingReviewListings,
+        pendingBookingsCount,
+        activeBookingsCount,
+        totalVolumeUSD: totalPriceVal,
+        pendingReportsCount
+      });
+    } catch (err) {
+      console.error("Failed to construct admin metrics summary:", err);
+      res.status(500).json({ error: "Could not build transaction metrics." });
+    }
+  });
+
+
   // Support serving front-end bundle as Vite dev server or static files
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
