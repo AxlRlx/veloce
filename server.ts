@@ -6,6 +6,25 @@ import { db } from "./src/db/index.ts";
 import { profiles, vehicles, bookings, conversations, messages, reviews, communityEvents, subscriptions, adminReports } from "./src/db/schema.ts";
 import { eq, and, desc } from "drizzle-orm";
 import { adminAuth } from "./src/lib/firebase-admin.ts";
+import { GoogleGenAI } from "@google/genai";
+
+let geminiClientInstance: GoogleGenAI | null = null;
+function getGeminiClient(): GoogleGenAI | null {
+  if (!geminiClientInstance) {
+    const key = process.env.GEMINI_API_KEY;
+    if (key && key !== "MY_GEMINI_API_KEY") {
+      geminiClientInstance = new GoogleGenAI({
+        apiKey: key,
+        httpOptions: {
+          headers: {
+            "User-Agent": "aistudio-build"
+          }
+        }
+      });
+    }
+  }
+  return geminiClientInstance;
+}
 
 const getFilename = () => {
   try {
@@ -431,14 +450,20 @@ async function startServer() {
         return res.status(404).json({ error: "Profile not found." });
       }
 
+      // Enforce: frontend cannot manually upgrade/change subscription or role via general profile edits
+      if (subscriptionTier !== undefined && subscriptionTier !== existingProfile[0].subscriptionTier) {
+        return res.status(403).json({ error: "Manual subscription tier upgrades are forbidden. Please use checkout." });
+      }
+      if (role !== undefined && role !== existingProfile[0].role) {
+        return res.status(403).json({ error: "Manual role mutations are forbidden." });
+      }
+
       // Prepare updates
       const updates: any = {
         updatedAt: new Date()
       };
       if (name !== undefined) updates.fullName = name;
       if (avatar !== undefined) updates.avatarUrl = avatar;
-      if (role !== undefined) updates.role = role;
-      if (subscriptionTier !== undefined) updates.subscriptionTier = subscriptionTier;
       if (kycStatus !== undefined) updates.kycStatus = kycStatus;
 
       const updated = await db
@@ -790,6 +815,22 @@ async function startServer() {
         return res.status(404).json({ error: "Specified vehicle was not found in active registry." });
       }
 
+      // Check for duplicate bookings/date conflicts on standard vehicles
+      const existingBookings = await db
+        .select()
+        .from(bookings)
+        .where(eq(bookings.vehicleId, body.carId));
+
+      const hasConflict = existingBookings.some(b => {
+        // Skip cancelled bookings for conflicts
+        if (b.status === "cancelled") return false;
+        return b.startDate <= body.endDate && b.endDate >= body.startDate;
+      });
+
+      if (hasConflict) {
+        return res.status(400).json({ error: "Booking conflict: This vehicle is already reserved for the selected dates." });
+      }
+
       const generatedId = body.id || `BC-${Math.floor(Math.random() * 90000 + 10000)}`;
 
       await db.insert(bookings).values({
@@ -801,7 +842,7 @@ async function startServer() {
         endDate: body.endDate,
         totalPrice: parseInt(body.totalPrice) || 300,
         status: 'upcoming',
-        paymentStatus: 'paid'
+        paymentStatus: 'pending' // Payment status starts as pending, changes only after webhook simulation
       });
 
       res.status(201).json({
@@ -814,7 +855,7 @@ async function startServer() {
         insuranceType: body.insuranceType || 'premium',
         status: 'upcoming',
         pickupLocation: matchVehicle[0].location,
-        paymentStatus: 'paid'
+        paymentStatus: 'pending'
       });
     } catch (err) {
       console.error("API failed to create booking:", err);
@@ -1193,7 +1234,7 @@ async function startServer() {
     }
   });
 
-  // 5. POST /api/chats/:id/simulate (Simulates auto-responses from dealers in db)
+  // 5. POST /api/chats/:id/simulate (Simulates auto-responses from dealers in db via Gemini, with graceful fallback to static list)
   app.post("/api/chats/:id/simulate", verifyFirebaseUser, async (req, res) => {
     const user = (req as any).user;
     const conversationId = req.params.id;
@@ -1217,12 +1258,80 @@ async function startServer() {
       // Dealer is the participant that is NOT the active logged-in user
       const dealerId = conv.userOne === user.uid ? conv.userTwo : conv.userOne;
 
+      // 1. Fetch vehicle details (if any)
+      let vehicleDetails = "";
+      if (conv.vehicleId) {
+        const carRes = await db.select().from(vehicles).where(eq(vehicles.id, conv.vehicleId)).limit(1);
+        if (carRes.length > 0) {
+          const car = carRes[0];
+          vehicleDetails = `Vehicle: ${car.year} ${car.make} ${car.model} (${car.horsepower} HP, ${car.mileage} miles, Price: $${car.price}, Rental: $${car.rentalPriceDaily}/day). Description: "${car.description}".`;
+        }
+      }
+
+      // 2. Fetch dealer role details (sender name)
+      const dealerProfileRes = await db.select().from(profiles).where(eq(profiles.id, dealerId)).limit(1);
+      const dealerName = dealerProfileRes[0]?.fullName || "Official Dealer";
+
+      // 3. Fetch recent message history to provide context
+      const recentMessages = await db
+        .select()
+        .from(messages)
+        .where(eq(messages.conversationId, conversationId))
+        .orderBy(desc(messages.createdAt))
+        .limit(10);
+      
+      // Reverse order to make it chronological
+      recentMessages.reverse();
+
+      const userProfileRes = await db.select().from(profiles).where(eq(profiles.id, user.uid)).limit(1);
+      const userName = userProfileRes[0]?.fullName || "Client";
+
+      const historyText = recentMessages
+        .map(m => {
+          const senderLabel = m.senderId === user.uid ? userName : dealerName;
+          return `${senderLabel}: ${m.body}`;
+        })
+        .join("\n");
+
+      // Check if we can use Gemini
+      let replyBody = text;
+      const geminiClient = getGeminiClient();
+      if (geminiClient) {
+        try {
+          const prompt = `You are a professional luxury car dealer representative named "${dealerName}" for "Veloce Hypercar Portal".
+You are conversing with a customer named "${userName}" about the following luxury vehicle:
+${vehicleDetails || "A luxury high-end supercar"}.
+
+Here is the recent conversation history:
+${historyText}
+
+Respond as "${dealerName}". Be professional, knowledgeable, exclusive, and exciting.
+Guidelines:
+- Keep the response short (1 to 3 sentences maximum) suitable for an instant chat app.
+- Do NOT prefix your response with your name (e.g., do NOT start with "${dealerName}:").
+- Address the client's last message naturally. Do not sound generic.
+- Promote active rentals, bespoke custom specifications, or booking confirmation if appropriate.`;
+
+          const response = await geminiClient.models.generateContent({
+            model: "gemini-3.5-flash",
+            contents: prompt,
+          });
+
+          if (response.text) {
+            replyBody = response.text.trim();
+          }
+        } catch (geminiErr) {
+          console.error("Gemini call failed, falling back to static text:", geminiErr);
+          // Keep default replyBody = text
+        }
+      }
+
       const newMsgId = `msg_sys_${Date.now()}`;
       await db.insert(messages).values({
         id: newMsgId,
         conversationId,
         senderId: dealerId,
-        body: text,
+        body: replyBody,
         createdAt: new Date(),
       });
 
@@ -1234,7 +1343,7 @@ async function startServer() {
       res.status(201).json({
         id: newMsgId,
         senderId: dealerId,
-        text,
+        text: replyBody,
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
         status: 'sent'
       });
@@ -1525,6 +1634,48 @@ async function startServer() {
     } catch (err) {
       console.error("Failed to verify billing session status:", err);
       res.status(500).json({ error: "Checkout session verification failed." });
+    }
+  });
+
+  // 4. POST /api/billing/webhook (Stripe webhook simulation for custom validations)
+  app.post("/api/billing/webhook", async (req, res) => {
+    const { type, data } = req.body;
+
+    if (!type || !data || !data.object) {
+      return res.status(400).json({ error: "Invalid stripe webhook payload format." });
+    }
+
+    try {
+      if (type === "checkout.session.completed") {
+        const session = data.object;
+        const bookingId = session.metadata?.bookingId;
+
+        if (bookingId) {
+          // It's a rental payment checkout session webhook simulation
+          const updated = await db
+            .update(bookings)
+            .set({ paymentStatus: "paid", updatedAt: new Date() })
+            .where(eq(bookings.id, bookingId))
+            .returning();
+
+          if (updated.length === 0) {
+            return res.status(404).json({ error: "Booking target from stripe metadata not found." });
+          }
+
+          console.log(`Stripe Webhook processed: Booking ${bookingId} paymentStatus set to paid.`);
+          return res.json({
+            received: true,
+            status: "success",
+            message: "paymentStatus updated successfully to paid after webhook simulation",
+            booking: updated[0]
+          });
+        }
+      }
+
+      res.status(250).json({ received: true, status: "ignored" });
+    } catch (err: any) {
+      console.error("Webhook execution failed:", err);
+      res.status(500).json({ error: "Webhook process exception." });
     }
   });
 

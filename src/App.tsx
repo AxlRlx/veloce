@@ -389,15 +389,18 @@ export default function App() {
   const handleLikedChange = (updatedLikedIds: string[]) => {
     if (!user) return;
     
+    // Ensure likes do not duplicate
+    const deduplicatedLikedIds = Array.from(new Set(updatedLikedIds));
+    
     // Limit free user saved/liked cars to 25 (Exempt dealers since they have premium perks)
     const isFree = (!user.subscriptionTier || user.subscriptionTier === 'free') && user.role !== 'dealer';
-    if (isFree && updatedLikedIds.length > 25) {
+    if (isFree && deduplicatedLikedIds.length > 25) {
       toast.info("Match Save Limit Reached! Free plans can standardly save up to 25 cars. Upgrade to Veloce GT to unlock unlimited saves.");
       setCurrentSection(AppSection.PROFILE);
       return;
     }
 
-    const updatedUser = { ...user, likedCarIds: updatedLikedIds };
+    const updatedUser = { ...user, likedCarIds: deduplicatedLikedIds };
     setUser(updatedUser);
   };
 
